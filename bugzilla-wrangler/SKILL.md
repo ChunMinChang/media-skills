@@ -99,18 +99,18 @@ Apply these rules when ranking themes. Higher-weight factors are listed first.
 
 | Factor | Effect |
 |--------|--------|
-| Bug severity is S1 or S2 | Validated internally as a major issue. |
-| Bug priority is P1 or P2 | Validated internally as a priority to fix. |
-| Crash volume and trend | >1 000 reports in 30 days is a strong signal; a rising trend (comparing two 30-day windows via Socorro) elevates the theme regardless of other factors |
-| `regression` keyword present | Higher priority — represents a user-visible regression from a prior release |
-| Bug status is NEW or ASSIGNED | Counts more than UNCONFIRMED (triage has validated it) |
+| High duplicate count or independent reporters with near-identical summaries | Both indicate broad user impact; weight more heavily when duplicates originate from unrelated reporters rather than a single coordinated source (e.g. a forum post) |
+| Meta/tracking bug exists (`keywords=meta`) | Strong multiplier — use its total dependency count as a proxy for theme breadth |
 | `cc_count` ≥ 10: moderate boost; `cc_count` ≥ 25: strong boost | Proxy for how many users are tracking the issue |
 | `comment_count` ≥ 15: moderate boost; `comment_count` ≥ 40: strong boost | Proxy for community demand and sustained engagement around the issue. Add `comment_count` to `include_fields`. |
+| Bug severity is S1 or S2 | Validated internally as a major issue. |
+| Bug priority is P1 or P2 | Validated internally as a priority to fix. |
+| Bug status is NEW or ASSIGNED | Counts more than UNCONFIRMED (triage has validated it) |
+| Crash volume and trend | >1 000 reports in 30 days is a strong signal; a rising trend (comparing two 30-day windows via Socorro) elevates the theme regardless of other factors |
+| `regression` keyword present | Higher priority — represents a user-visible regression from a prior release |
 | Non-Mozilla commenter activity | A thread dominated by non-mozilla.com accounts signals direct end-user impact rather than internal triage noise; weight proportionally to the number of distinct non-Mozilla participants |
-| High duplicate count or independent reporters with near-identical summaries | Both indicate broad user impact; weight more heavily when duplicates originate from unrelated reporters rather than a single coordinated source (e.g. a forum post) |
 | `last_change_time` older than 30 days with no resolution | *Negative factor*: marks a theme as stagnant — call this out in the report rather than using it as a positive signal |
 | `stalled` keyword with S1 or S2 severity | Notable: acknowledged this needs to be fixed but there are no engineers available |
-| Meta/tracking bug exists (`keywords=meta`) | Strong multiplier — use its total dependency count as a proxy for theme breadth |
 
 A theme requires at least 3 breadcrumbs to be included in the report.
 
