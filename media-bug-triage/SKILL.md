@@ -159,7 +159,7 @@ Always exclude bugs belonging to core security groups from search results.
 
 ---
 
-## Data Processing Reference
+## Bug Data Processing Reference
 
 The following information may or may not be present in a bug, but when it is, it is useful for analysis.
 
@@ -301,7 +301,7 @@ If about:support data is found, immediately invoke the About:Support Extraction 
 - Reporter cannot reliably reproduce
 - Steps depend on undocumented environment details
 
-Also collect platform specifics and Firefox version information from the bug report and comments, as these are important context for reproducibility.
+Collect platform specifics and Firefox version information from the bug report and comments, as these are important context for reproducibility.
 
 **Examples:**
 - **Good STR:** "1. Open about:config, 2. Set media.hardware-video-decoding.enabled to true, 3. Open youtube.com/watch?v=xyz, 4. Observe crash after 5 seconds"
@@ -319,10 +319,10 @@ Check for:
 
 #### Key Contributors
 
-External reporter Bugzilla emails to recognize:
+Bugzilla emails to recognize:
 
 - `mozilla.com`, `mozilla.org`, `mozilla.net` — Likely Mozilla employees. Their feedback carries more weight, and seeking their input is straightforward.
-- `alice0775@gmail.com` — A prolific external reporter known for accuracy in reporting and testing media-related bugs. Their feedback and confirmation is likely accurate.
+- `alice0775@gmail.com` — A prolific external reporter known for accuracy in reporting and testing media-related bugs. Their feedback and confirmation is likely accurate. (A simple cc on bugs is common though and carries little weight.)
 
 #### Crash Stacks
 
