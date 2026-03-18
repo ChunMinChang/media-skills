@@ -27,7 +27,7 @@ At invocation, check whether the user specified a platform or topic (e.g. "andro
 
 ### media
 - **Product:** Core
-- **Components:** Audio/Video, Audio/Video: cubeb, Audio/Video: GMP, Audio/Video: MediaStreamGraph, Audio/Video: Playback, Audio/Video: Recording, Audio/Video: Web Codecs
+- **Components:** Audio/Video, Audio/Video: cubeb, Audio/Video: GMP, Audio/Video: MediaStreamGraph, Audio/Video: Playback, Audio/Video: Recording, Audio/Video: Web Codecs, Web Audio
 
 ### android
 - **Product:** Firefox for Android
@@ -37,11 +37,11 @@ At invocation, check whether the user specified a platform or topic (e.g. "andro
 
 ### web-conferencing
 - **Product:** Core
-- **Components:** WebRTC, WebRTC: Audio/Video, WebRTC: Networking, DOM: Screen Capture
+- **Components:** WebRTC, WebRTC: Audio/Video, WebRTC: Networking, WebRTC: Signaling
 
 ### media-and-web-conferencing
 - **Product:** Core
-- **Components:** Audio/Video, Audio/Video: cubeb, Audio/Video: GMP, Audio/Video: MediaStreamGraph, Audio/Video: Playback, Audio/Video: Recording, Audio/Video: Web Codecs, WebRTC, WebRTC: Audio/Video, WebRTC: Networking, DOM: Screen Capture
+- **Components:** Audio/Video, Audio/Video: cubeb, Audio/Video: GMP, Audio/Video: MediaStreamGraph, Audio/Video: Playback, Audio/Video: Recording, Audio/Video: Web Codecs, Web Audio, WebRTC, WebRTC: Audio/Video, WebRTC: Networking, WebRTC: Signaling
 
 ### graphics
 - **Product:** Core
