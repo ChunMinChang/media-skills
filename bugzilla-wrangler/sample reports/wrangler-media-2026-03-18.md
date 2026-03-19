@@ -106,6 +106,7 @@ The seed skews toward late-January and March, which aligns with Firefox 148 pre-
 | Bug ID | Summary | Severity | Status | Last Changed |
 |--------|---------|----------|--------|--------------|
 | [1916629](https://bugzilla.mozilla.org/show_bug.cgi?id=1916629) | Crash in [@ mio::sys::windows::named_pipe::read_done] | S3 | ASSIGNED (ChunMinChang) | 2026-03-18 |
+| -- | -- | -- | (Jim note) ^ bug is assigned to kinetik and has been since 2024. ChunMin is not on the bug. Clear accuracy error. | -- |
 | [2024485](https://bugzilla.mozilla.org/show_bug.cgi?id=2024485) | Update mio to 1.1.1 (fix) | -- | ASSIGNED | 2026-03-18 |
 | [1899317](https://bugzilla.mozilla.org/show_bug.cgi?id=1899317) | Move Cubeb processing to a utility process (Windows) | S3 | ASSIGNED | 2026-03-18 |
 | [2024498](https://bugzilla.mozilla.org/show_bug.cgi?id=2024498) | Rework AudioIPC initialization to avoid blocking parent main thread | -- | ASSIGNED | 2026-03-18 |
