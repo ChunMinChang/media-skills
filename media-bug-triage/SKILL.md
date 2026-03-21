@@ -146,7 +146,7 @@ Fetch the initial bug report, including:
   - Severity and priority assignments
   - Field changes made by Mozilla employees carry more weight than those made by anonymous or external users.
 
-Print a brief summary of the bug including summary, reporter, reported date (bug age), severity/priority, and note if the bug is security sensitive.
+**Print a brief summary** of the bug including summary, reporter, reported date (bug age), severity/priority, and note if the bug is security sensitive.
 
 ### Step 4: Organize and Analyze Bug Information
 
@@ -172,64 +172,16 @@ Would you like to analyze a different bug? Please provide another bug number, or
 
 If the bug is **open** (status is `NEW`, `UNCONFIRMED`, `ASSIGNED`, `REOPENED`, etc.), proceed with analysis.
 
-#### About:Support Detection
+#### Process Bug Data
 
-Scan all fetched comments for about:support data using the detection markers defined in the Data Processing Reference. Check both inline comment text and attachment filenames (e.g. `troubleshooting-data.json`, `about-support.txt`).
+Use the skills outlined in Bugzilla.md to process information contained on the bug report.
 
-If about:support data is found, immediately invoke the About:Support Extraction Procedure before continuing. Incorporate the extracted fields — especially crash IDs — into all subsequent analysis steps.
+##### Key Contributors
 
-#### Steps to Reproduce (STR)
-
-**Mark as having STR only if:**
-- Steps are detailed enough for >70% reproducibility
-- Specific conditions, settings, and actions are documented
-- A developer could reliably trigger the issue
-
-**Mark as NOT having STR if:**
-- Steps are vague ("browse the web", "watch videos")
-- Issue is intermittent without clear triggers
-- Reporter cannot reliably reproduce
-- Steps depend on undocumented environment details
-
-Collect platform specifics and Firefox version information from the bug report and comments, as these are important context for reproducibility.
-
-**Examples:**
-- **Good STR:** "1. Open about:config, 2. Set media.hardware-video-decoding.enabled to true, 3. Open youtube.com/watch?v=xyz, 4. Observe crash after 5 seconds"
-- **Bad STR:** "Sometimes when watching YouTube videos, the video stops playing"
-
-#### Test Cases
-
-Check for:
-- Attached HTML/JS/CSS test files
-- Reproduction code in comments
-- References to test cases
-- Files named: `testcase*`, `repro*`, `poc*`, `reduced*`, `min*`, `minimized*`
-- Keywords: `testcase`
-- Flags: `in-testsuite+`, `in-qa-testsuite+`
-
-#### Key Contributors
-
-Bugzilla emails to recognize:
+Bugzilla emails to recognize when processing a bug report:
 
 - `mozilla.com`, `mozilla.org`, `mozilla.net` — Likely Mozilla employees. Their feedback carries more weight, and seeking their input is straightforward.
 - `alice0775@gmail.com` — A prolific external reporter known for accuracy in reporting and testing media-related bugs. Their feedback and confirmation is likely accurate. (A simple cc on bugs is common though and carries little weight.)
-
-#### Crash Stacks
-
-Look for:
-- Stack traces with frame addresses (`#0 0x12345...`)
-- AddressSanitizer (ASan) output
-- UndefinedBehaviorSanitizer (UBSan) output
-- ThreadSanitizer (TSan) output
-- MemorySanitizer (MSan) output
-- `cf_crash_signature` field content
-
-#### Fuzzing Origin
-
-Patterns indicating fuzzing:
-- "found while fuzzing"
-- fuzzilli, oss-fuzz, fuzzfetch, grizzly references
-- Fuzzer tool mentions
 
 #### Regression Timeline
 
@@ -297,12 +249,19 @@ Based on the information gathered, evaluate these two questions:
 - **Yes** — Summarize findings and pause. Ask the user if they would like to continue, or prefer to request more information from the reporter.
 - **No** — Continue to the Bugzilla Investigation step.
 
+#### Assess Bug Severity
+
+Based on the information gathered, make a quick assessment of the bug's severity. Use the Bugzilla
+severity definitions as a reference, but apply your judgment based on the specific symptoms and impact
+described in the bug report. Report your assessment and reasoning to the user.
+
 ### Step 6: Bugzilla Investigation
 
 **Goal:** Broaden our view beyond the single bug report by searching for similar reports, following
 bug relationships, and building a picture of the issue landscape. The output is a structured set of
 related bugs organized by relevance — including duplicate candidates, related meta bugs, and any
-patterns suggesting a common root cause.
+patterns suggesting a common root cause. Use the information you have gathered so far to guide targeted
+searches and relation-following.
 
 #### Phase A: Derive Search Terms
 
@@ -398,8 +357,6 @@ This investigation helps:
 
 At this point, you should have a good understanding of the issue, its symptoms, and possible causes. Determine if we need to ask the reporter or others for additional information to confirm our understanding. This is particularly important if there are information gaps preventing a confident assessment, or if there are multiple possible causes that need to be narrowed down. Requesting more information is often more economical than having developers analyze an issue with incomplete information.
 
-> Do not delay triage if the perceived issue represents an S1 or S2 severity. We can still ask for information, but should not block the triage process.
-
 #### Feedback Request Drafting
 
 Draft an appropriate response using either:
@@ -415,7 +372,7 @@ Response guidelines:
 
 ### Step 9: Generate Analysis Report
 
-Generate a detailed triage report and summary in markdown format. See the **Analysis Report Format** section for structure details.
+Generate a detailed triage report and summary in markdown format. See the **Analysis Report Format** section for structure details. Also print out a proposed response to the user.
 
 Always write the report to a `./reports` sub-directory with the filename `bug-{BUG_ID}-triage.md`. If the file already exists, create a new file with a numeric suffix (e.g., `bug-{BUG_ID}-triage-2.md`).
 
@@ -423,66 +380,18 @@ Prompt for next steps:
 1. Copy the detailed report to the clipboard.
 2. Copy the shorter summary to the clipboard.
 3. Ask a question (format: `3, question text`).
-4. Triage another bug.
-5. Exit skill.
+4. Continue with analysis.
+5. Triage another bug.
+6. Exit skill.
 
 - If option 1 or 2: copy to clipboard and re-prompt.
 - If option 3: prompt for a question about the bug or analysis, provide an answer, then return to this prompt.
-- If option 4: prompt for a new bug identifier and restart the triage process.
 
 ### Step 10: End of Analysis
 
 When analysis is complete and a report is generated, end the skill. Before ending, update the `FUNCTIONALITY.md` file with any new information or insights gained that may be useful for future analyses. Also suggest any improvements to this skill that would make future analyses more effective or efficient.
 
----
-
-## Canned Response Reference
-
-Use these templates as starting points, customizing for each bug. Full templates are in the `CANNED_RESPONSES.md` supplement file.
-
-### Information Requests
-
-| ID | Use When | Template Summary |
-|----|----------|------------------|
-| `need-str` | STR missing/unclear | Request specific reproduction steps |
-| `need-testcase` | Need minimal test | Request reduced HTML/JS/CSS example |
-| `need-profile` | Need logs | Request Firefox profile via about:logging |
-| `need-crash-report` | Crash without report | Request bp-* IDs from about:crashes |
-| `more-info-needed` | General info gap | Request version, OS, extensions, regression info |
-| `need-regression-range` | Possible regression | Suggest mozregression bisection |
-| `need-system-info` | Need hardware/system details | Request about:support info |
-
-### Status Updates
-
-| ID | Use When | Template Summary |
-|----|----------|------------------|
-| `confirmed` | Reproduced issue | Confirm with environment details |
-| `investigating` | Looking into it | Acknowledge and request patience |
-
-### Resolutions
-
-| ID | Use When | Template Summary |
-|----|----------|------------------|
-| `duplicate` | Same as another bug | Link to duplicate, explain |
-| `wontfix` | Won't be fixed | Explain reasoning |
-| `worksforme` | Can't reproduce | Share test environment, request more info |
-| `incomplete` | No response to needinfo | Close with invitation to refile |
-
-### Acknowledgements
-
-| ID | Use When | Template Summary |
-|----|----------|------------------|
-| `fuzzing-thanks` | Fuzzer-found bug | Thank for fuzzing contribution |
-| `first-time-contributor` | New reporter | Welcome message |
-| `good-report` | Quality report | Thank for clear details |
-
-### Special Cases
-
-| ID | Use When | Template Summary |
-|----|----------|------------------|
-| `security-notice` | Security implications | Restrict visibility, link to bounty program |
-| `moved-component` | Wrong component | Explain the move |
-| `needs-platform-team` | Platform-specific | Add platform specialists |
+(end of workflow steps)
 
 ---
 
@@ -547,9 +456,15 @@ caused the regression. This information is often found in the initial bug report
 Detail any codebase investigation performed, including relevant files examined and specific areas
 worth investigating further based on your research.
 
-## Suggested Investigation Areas
+### Relevant Files Examined
+- [file path]: [what it contains]
+- ...
 
-[Specific code areas developers should look at.]
+### Findings
+[What you discovered from investigating the code]
+
+### Suggested Investigation Areas
+[Specific code areas developers should look at]
 
 ## Bugzilla Use Tracking
 
@@ -558,3 +473,51 @@ worth investigating further based on your research.
 - Estimated Download Bandwidth Used: {BANDWIDTH} MB
 - Inaccessible Bugs Due to Permissions: {INACCESSIBLE_BUGS}
 ```
+
+## Canned Response Reference
+
+Use these templates as starting points, customizing for each bug. Full templates are in the `CANNED_RESPONSES.md` supplement file.
+
+### Information Requests
+
+| ID | Use When | Template Summary |
+|----|----------|------------------|
+| `need-str` | STR missing/unclear | Request specific reproduction steps |
+| `need-testcase` | Need minimal test | Request reduced HTML/JS/CSS example |
+| `need-profile` | Need logs | Request Firefox profile via about:logging |
+| `need-crash-report` | Crash without report | Request bp-* IDs from about:crashes |
+| `more-info-needed` | General info gap | Request version, OS, extensions, regression info |
+| `need-regression-range` | Possible regression | Suggest mozregression bisection |
+| `need-system-info` | Need hardware/system details | Request about:support info |
+
+### Status Updates
+
+| ID | Use When | Template Summary |
+|----|----------|------------------|
+| `confirmed` | Reproduced issue | Confirm with environment details |
+| `investigating` | Looking into it | Acknowledge and request patience |
+
+### Resolutions
+
+| ID | Use When | Template Summary |
+|----|----------|------------------|
+| `duplicate` | Same as another bug | Link to duplicate, explain |
+| `wontfix` | Won't be fixed | Explain reasoning |
+| `worksforme` | Can't reproduce | Share test environment, request more info |
+| `incomplete` | No response to needinfo | Close with invitation to refile |
+
+### Acknowledgements
+
+| ID | Use When | Template Summary |
+|----|----------|------------------|
+| `fuzzing-thanks` | Fuzzer-found bug | Thank for fuzzing contribution |
+| `first-time-contributor` | New reporter | Welcome message |
+| `good-report` | Quality report | Thank for clear details |
+
+### Special Cases
+
+| ID | Use When | Template Summary |
+|----|----------|------------------|
+| `security-notice` | Security implications | Restrict visibility, link to bounty program |
+| `moved-component` | Wrong component | Explain the move |
+| `needs-platform-team` | Platform-specific | Add platform specialists |
