@@ -1,0 +1,11 @@
+Bugs listed here may address numerous test failures with a single fix.,,,,
+bug #,Description,,,Owner
+,WPT dashboard testing issues with accessing the GMP H264 plugin,,,
+Bug 1225723 - Implement RTCTransportStats,Total of 17 subtests spread over 4 test files.,,,
+Bug 1529398 - Implement RTCConfiguration.iceCandidatePoolSize,Total of 10 subtests spread over 2 files.,,,
+Bug 1527916 - Support RTCError interface,Total of 28 subtests over 2 test files.,,,
+Bug 1307994 - Implement the RTCIceTransport interface,Total of 8 subtests over 2 test files.,,,
+Bug 1803388 - Remove setParameters backward compatibility mode once it is no longer needed,Total of 8 subtests over 3 test files.,,,
+Bug 1765851 - Populate RTCRtpParameters.headerExtensions,"Total of 6 subtests over 3 test files, but 4 of those would also require bug 1765852.",,,
+Bug 1765852 - Populate RTCRtpParameters.rtcp,"Total of 6 subtests over 2 test files, but 4 of those would also require bug 1765851.",,,
+Bug 1340372 - Support 3gpp:video-orientation in WebRTC,Total of 5 subtests over 2 test files.,,,
