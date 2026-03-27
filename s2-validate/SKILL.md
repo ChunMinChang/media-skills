@@ -341,6 +341,8 @@ Based on the description of the issue in the first comment, and any additional i
 
 This will be a subjective evaluation of the clarity, completeness, and consistency of the information provided in the bug report and its comments, as well as the nature of the issue being reported. The goal is to determine whether the information provided supports a conclusion that the issue is severe enough to warrant an S1 or S2 rating, or if it appears to be less severe based on the available information.
 
+The first comment should provide a clear description of the issue and its impact on users, along with any reproduction steps or test cases that demonstrate the issue. Subsequent comments may provide additional information, clarification, or evidence that can help to further assess the severity of the issue.  If this is missing (e.g., the entry is blank, or only provides a link to an external resource), this may be a red flag that the issue does not meet the criteria for S1 or S2 severity, as it may indicate a lack of clear information about the issue and its impact on users.
+
 #### Factors for Evaluation
 
 Factors to be considered in this evaluation should be based on the following questions:
