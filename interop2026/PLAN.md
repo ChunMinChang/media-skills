@@ -36,6 +36,7 @@ The lead developer on this project, Byron Campen, has been filing bugs in Bugzil
 | Daniel Baker | dbaker@mozilla.com |
 | Jan-Ivar Bruaroey | jib@mozilla.com |
 | Nico Grunbam | na-g@nostrum.com |
+| Andreas Pehrson | apehrson@mozilla.com |
 
 ## Triage Spreadsheets
 
@@ -61,11 +62,23 @@ Much of this work will be associated with WebRTC specification compliance. In th
   - Spreadsheet information: Notes, Importance, Bug relationships, Owner if available, Importance / size if known
   - The current Firefox score for the test from wpt.fyi
   - A velocity tracking field - "first seen passing" date
-- **Connect development work** — Using spreadsheet and Bugzilla information, connect development work needed with individual tests. Sanity check the relationships.
+- **Connect development work** — Using spreadsheet and the task related information in Bugzilla, connect development work
+   needed to improve test scores with individual tests in our inventory. Sanity check the relationships. Also note assignment
+   of work to team members, which provides some input into the development of our roadmap.
 - **Search for unknown dependencies** — Using the bugs we already know about, search for additional dependencies in Bugzilla.
 - **Define small projects** that encompass accomplishing improving a specific set of test scores. Score these by test score impact.
 - **Associate tests with projects** - Keep track of what work will be needed (including the bugs that will need ot be fixed) to address each test.
 - **Gap analysis** — Identify gaps between our test lists and Bugzilla.
+
+## Caching
+
+- Don't cache Bugzilla data, always refresh the information we need.
+- Cache browser WebRTC scores (total and on a per-test basis) when we retreive them in a local json file. We can use this for
+   generating change graphs. Data should have date and time the data was fetched and the each test score for all browsers.
+- Load `resources/test-annotations.json` at the start of each run. This file captures non-obvious per-test context that is not
+   derivable from WPT scores or Bugzilla: confirmed WPT flaws, invalid tests, deprecated path changes, risky fixes, on-hold
+   status, and first-passing dates. Use it to avoid re-investigating known issues. Update it when a run produces new findings
+   (e.g. a test changes status, a path changes, a fix lands).
 
 ## Report
 
@@ -75,7 +88,13 @@ Report what you have found using the general format below, and save this in the 
 **Header** — Time and Date, WPT run date, commit, browser versions
 **Links** - Link to interop 2026 wpt dashboard, link to interop 2026 meta bug
 **Score Summary** — Table of passing/total/percentage for Firefox, Chrome, and Safari across all tracked tests
-**Notable Changes** — A per-report "Changes Since Last Report" delta. Each new report should include a three-line summary: points added (new bugs/tests), points removed (fixed), and net change. This gives the team a quick pulse check without reading the full inventory.
+**Notable Changes** — A per-report "Notable Changes Since Triage Sheet" delta mini-report. Include -
+   - A test change summary: points added (new bugs/tests), points removed (fixed), and net change.
+   - Tests fully passing our criteria.
+   - New bugs filed since the last report.
+   - Tracked bugs that have closed since the last report.
+   - Anything else notable.
+**Assigned Bugs** - Itemize bugs in Bugzilla that are currently associated with this project and assigned to a member of the team.
 **Priority Assessment** — Grouped view of the work: high-priority unblocked items, quick wins, items needing investigation, and items on hold
 **Aggregate Bugs** — Bugs that affect multiple test files, with a count of subtests and files impacted per bug
 **Gap Analysis** — Tests with no bug filed; tests suspected to be WPT test issues rather than Firefox bugs; H264 infrastructure failures that
@@ -97,8 +116,8 @@ Report what you have found using the general format below, and save this in the 
 ## Suggest and Exit
 
 Prior to exiting, suggest ways to improve this plan. Specifically -
-- ways to improve project tracking over time
-- ways the team cano improve the data we have in bugzilla
+- ways to improve project tracking over time.
+- ways the team can improve the data we have in bugzilla.
 
 ---
 
