@@ -12,11 +12,17 @@
 
 ### Score Summary
 
-| Browser | Passing | Total | % |
-|---------|---------|-------|---|
-| Firefox | — | — | —% |
-| Chrome  | — | — | —% |
-| Safari  | — | — | —% |
+_Scores across all n tracked single browser failure tests:_
+
+| Directory | Tests | Firefox | Chrome | Safari |
+|-----------|-------|---------|--------|--------|
+| webrtc/ | N | N/N (N%) | N/N (N%) | N/N (N%) |
+
+**test added or subtracted to tracking this week**
+
+| Test | Firefox | Chrome | Safari | Notes |
+|------|---------|--------|--------|-----|
+| [`/webrtc/test.html`](https://wpt.fyi/results/webrtc/test.html) | N/N | N/N | N/N | — |
 
 ### Score Burndown
 
@@ -58,6 +64,14 @@ _Tests suspected to be WPT or spec issues rather than Firefox bugs:_
 | Test | Issue / Bug | Notes |
 |------|-------------|-------|
 | `/webrtc/path/to/test.html` | [wpt#XXXXX](https://github.com/web-platform-tests/wpt/issues/XXXXX) | Notes |
+
+### External Issue Status
+
+| Issue | Type | Title | Status | Last Activity |
+|-------|------|-------|--------|---------------|
+| [wpt#XXXXX](https://github.com/web-platform-tests/wpt/issues/XXXXX) | WPT | Title | Open / Closed | YYYY-MM-DD |
+| [webrtc-pc#XXXX](https://github.com/w3c/webrtc-pc/issues/XXXX) | webrtc-pc | Title | Open / Closed | YYYY-MM-DD |
+| [XXXXXXX](https://bugzilla.mozilla.org/show_bug.cgi?id=XXXXXXX) | Bugzilla | Title | Status | YYYY-MM-DD |
 
 ### Gap Analysis
 
@@ -129,6 +143,12 @@ _One entry per test, grouped by directory. ✅ = Firefox fully passing. Test nam
 | Test | Firefox | Chrome | Safari | Owner | Bugs | Spec Area | Notes |
 |------|---------|--------|--------|-------|------|-----------|-------|
 | [`/webrtc/simulcast/test.html`](https://wpt.fyi/results/webrtc/simulcast/test.html) · [live](https://wpt.live/webrtc/simulcast/test.html) | N/N | N/N | N/N | — | — | — | — |
+
+### webrtc-encoded-transform/
+
+| Test | Firefox | Chrome | Safari | Owner | Bugs | Spec Area | Notes |
+|------|---------|--------|--------|-------|------|-----------|-------|
+| [`/webrtc-encoded-transform/test.html`](https://wpt.fyi/results/webrtc-encoded-transform/test.html) · [live](https://wpt.live/webrtc-encoded-transform/test.html) | N/N | N/N | N/N | — | — | — | — |
 
 ---
 
