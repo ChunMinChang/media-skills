@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bug Triage Reports</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    background: #f9f9fb;
+    color: #15141a;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 14px 20px;
+    background: #ffffff;
+    border-bottom: 3px solid #ff6611;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 16px; font-weight: 600; color: #15141a; white-space: nowrap; }
+  #filter {
+    flex: 1;
+    max-width: 480px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #cfcfd8;
+    background: #f9f9fb;
+    color: #15141a;
+    font-size: 13px;
+    outline: none;
+  }
+  #filter:focus { border-color: #0060df; box-shadow: 0 0 0 2px #0060df33; }
+  #count { font-size: 12px; color: #6f6f8d; white-space: nowrap; }
+  .sort-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .sort-controls label { font-size: 12px; color: #6f6f8d; white-space: nowrap; }
+  #sort-field {
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid #cfcfd8;
+    background: #f9f9fb;
+    color: #15141a;
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+  }
+  #sort-field:focus { border-color: #0060df; box-shadow: 0 0 0 2px #0060df33; }
+  #sort-dir {
+    padding: 5px 9px;
+    border-radius: 6px;
+    border: 1px solid #cfcfd8;
+    background: #f9f9fb;
+    color: #15141a;
+    font-size: 13px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  #sort-dir:hover { border-color: #0060df; }
+  #list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card {
+    background: #ffffff;
+    border: 1px solid #cfcfd8;
+    border-radius: 8px;
+    padding: 12px 16px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .card:hover { border-color: #ff6611; box-shadow: 0 2px 8px #ff661122; }
+
+  .bubble {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    border: 1px solid;
+    white-space: nowrap;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .bubble-green  { background: #e3f5e9; color: #017a40; border-color: #017a40; }
+  .bubble-gray   { background: #f0f0f4; color: #5b5b66; border-color: #cfcfd8; }
+  .bubble-red    { background: #fff0f0; color: #d70022; border-color: #d70022; }
+  .bubble-black  { background: #15141a; color: #ffffff; border-color: #15141a; }
+
+  .bubbles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .bubble-divider {
+    width: 1px;
+    height: 14px;
+    background: #cfcfd8;
+    flex-shrink: 0;
+  }
+
+  .card-text {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #15141a;
+    line-height: 1.5;
+  }
+  .card-summary { font-weight: 500; margin-bottom: 4px; }
+  .card-preview { font-size: 12px; color: #5b5b66; }
+  mark { background: #ffdb6f; color: #15141a; border-radius: 2px; padding: 0 1px; }
+  #empty { text-align: center; color: #6f6f8d; padding: 40px; display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bug Triage Reports</h1>
+  <input id="filter" type="search" placeholder="Filter by keyword, bug ID, component, severity..." autofocus>
+  <div class="sort-controls">
+    <label for="sort-field">Sort:</label>
+    <select id="sort-field">
+      <option value="id">Bug ID</option>
+      <option value="generated">Date</option>
+      <option value="component">Component</option>
+      <option value="reporter">Reporter</option>
+      <option value="current_status">Status</option>
+      <option value="current_severity">Severity</option>
+      <option value="current_priority">Priority</option>
+    </select>
+    <button id="sort-dir" title="Toggle sort direction">&#x2193;</button>
+  </div>
+  <span id="count"></span>
+</header>
+<div id="list"></div>
+<div id="empty">No reports match your filter.</div>
+
+<script>
+const REPORTS = __REPORTS_JSON__;
+REPORTS.forEach(r => { r.current_status = ''; r.current_severity = ''; r.current_priority = ''; });
+
+const filterEl  = document.getElementById('filter');
+const listEl    = document.getElementById('list');
+const countEl   = document.getElementById('count');
+const emptyEl   = document.getElementById('empty');
+const sortField = document.getElementById('sort-field');
+const sortDir   = document.getElementById('sort-dir');
+
+let sortAsc = false;
+
+function sortKey(r) {
+  switch (sortField.value) {
+    case 'id':       return parseInt(r.id) || 0;
+    case 'generated': return r.generated || '';
+    case 'component': return (r.component || '').toLowerCase();
+    case 'reporter':  return (r.reporter || '').toLowerCase();
+    case 'current_status': return (r.current_status || '').toLowerCase();
+    case 'current_severity': { const m = (r.current_severity || '').match(/^[Ss](\d)/); return m ? parseInt(m[1]) : 99; }
+    case 'current_priority': { const m = (r.current_priority || '').match(/^[Pp](\d)/); return m ? parseInt(m[1]) : 99; }
+    default: return '';
+  }
+}
+
+function sorted(arr) {
+  return [...arr].sort((a, b) => {
+    const ka = sortKey(a), kb = sortKey(b);
+    const cmp = ka < kb ? -1 : ka > kb ? 1 : 0;
+    return sortAsc ? cmp : -cmp;
+  });
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function highlight(text, terms) {
+  if (!terms.length) return escapeHtml(text);
+  let result = escapeHtml(text);
+  terms.forEach(t => {
+    const re = new RegExp('(' + t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi');
+    result = result.replace(re, '<mark>$1</mark>');
+  });
+  return result;
+}
+
+function matches(r, terms) {
+  if (!terms.length) return true;
+  const haystack = [
+    r.id, r.summary, r.component, r.product,
+    r.current_status, r.current_severity, r.current_priority,
+    r.severity_priority, r.reporter, r.generated, r.full_text
+  ].join(' ').toLowerCase();
+  return terms.every(t => haystack.includes(t.toLowerCase()));
+}
+
+function statusClass(s) {
+  if (!s) return 'bubble-gray';
+  return s.trim().toUpperCase() === 'RESOLVED' ? 'bubble-black' : 'bubble-green';
+}
+
+function severityClass(s) {
+  if (!s) return 'bubble-gray';
+  const v = s.trim().toUpperCase();
+  return (v.startsWith('S1') || v.startsWith('S2')) ? 'bubble-red' : 'bubble-green';
+}
+
+function priorityClass(p) {
+  if (!p) return 'bubble-gray';
+  const v = p.trim().toUpperCase();
+  return (v.startsWith('P1') || v.startsWith('P2')) ? 'bubble-red' : 'bubble-green';
+}
+
+function buildLiveHtml(r) {
+  const liveStatus = r.current_status
+    ? `<span class="bubble ${statusClass(r.current_status)}">${escapeHtml(r.current_status)}</span>` : '';
+  const liveSev = r.current_severity
+    ? `<span class="bubble ${severityClass(r.current_severity)}">${escapeHtml(r.current_severity)}</span>` : '';
+  const livePri = r.current_priority
+    ? `<span class="bubble ${priorityClass(r.current_priority)}">${escapeHtml(r.current_priority)}</span>` : '';
+  const hasLive = liveStatus || liveSev || livePri;
+  return hasLive ? `<span class="bubble-divider"></span>${liveStatus}${liveSev}${livePri}` : '';
+}
+
+function render() {
+  const raw = filterEl.value.trim();
+  const terms = raw ? raw.split(/\s+/).filter(Boolean) : [];
+  const filtered = sorted(REPORTS.filter(r => matches(r, terms)));
+
+  listEl.innerHTML = '';
+  emptyEl.style.display = filtered.length === 0 ? 'block' : 'none';
+  countEl.textContent = `${filtered.length} of ${REPORTS.length}`;
+
+  filtered.forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.id = r.id;
+
+    const bugUrl = r.bug_url || `https://bugzilla.mozilla.org/show_bug.cgi?id=${r.id}`;
+    const previewText = (r.research_summary || '').slice(0, 500);
+    const hasMore = (r.research_summary || '').length > 500;
+
+    card.innerHTML = `
+      <div class="bubbles">
+        <a class="bubble bubble-green" href="${escapeHtml(bugUrl)}" target="_blank" onclick="event.stopPropagation()">Bug ${escapeHtml(r.id)}</a>
+        ${r.generated        ? `<span class="bubble bubble-gray">${escapeHtml(r.generated)}</span>` : ''}
+        ${r.component        ? `<span class="bubble bubble-red">${highlight(r.component, terms)}</span>` : ''}
+        ${r.severity_priority ? `<span class="bubble bubble-gray">${escapeHtml(r.severity_priority)}</span>` : ''}
+        ${r.reporter         ? `<span class="bubble bubble-black">${highlight(r.reporter, terms)}</span>` : ''}
+        <span class="live-section">${buildLiveHtml(r)}</span>
+      </div>
+      <div class="card-text">
+        <div class="card-summary">${highlight(r.summary || '(no summary)', terms)}</div>
+        <div class="card-preview">${highlight(previewText, terms)}${hasMore ? '&hellip;' : ''}</div>
+      </div>
+      ${r.file_url ? `<div style="margin-top:8px"><a href="${escapeHtml(r.file_url)}" target="_blank" style="font-size:12px;color:#0060df">Original Report</a></div>` : ''}
+    `;
+
+    listEl.appendChild(card);
+  });
+}
+
+async function fetchBugzilla(r) {
+  try {
+    const resp = await fetch(`https://bugzilla.mozilla.org/rest/bug/${r.id}?include_fields=status,severity,priority`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const bug = data.bugs && data.bugs[0];
+    if (!bug) return;
+    r.current_status   = bug.status   || '';
+    r.current_severity = bug.severity || '';
+    r.current_priority = bug.priority || '';
+    const card = listEl.querySelector(`[data-id="${r.id}"]`);
+    if (card) card.querySelector('.live-section').innerHTML = buildLiveHtml(r);
+  } catch (_) {}
+}
+
+filterEl.addEventListener('input', render);
+sortField.addEventListener('change', render);
+sortDir.addEventListener('click', () => {
+  sortAsc = !sortAsc;
+  sortDir.textContent = sortAsc ? '\u2191' : '\u2193';
+  render();
+});
+render();
+REPORTS.forEach(r => fetchBugzilla(r));
+</script>
+</body>
+</html>
