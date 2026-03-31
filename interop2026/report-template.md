@@ -22,44 +22,57 @@
 
 _Each failing subtest = 1 point. Based on the burndown of points thus far, projected date to reach zero: YYYY-MM-DD._
 
+---
+
+## Project Tracking
+
+### Assigned Bugs
+
+_Bugs currently assigned to a team member:_
+
+| Bug | Summary | Assignee | Spec Area | Status |
+|-----|---------|----------|--------|--------|
+| [XXXXXXX](https://bugzilla.mozilla.org/show_bug.cgi?id=XXXXXXX) | Summary | ICE | engineer@mozilla.com | NEW / ASSIGNED |
+
 ### Notable Changes
 
-_Delta since last report (YYYY-MM-DD):_
+_Delta in the last week:_
 
 - **Points added** (new bugs/tests): N
 - **Points removed** (fixed): N
 - **Net change:** N
 
-**New bugs filed this week:**
+**New bugs filed:**
 - [XXXXXXX](https://bugzilla.mozilla.org/show_bug.cgi?id=XXXXXXX) — Summary
 
-**Bugs closed this week:**
+**Bugs closed:**
 - [XXXXXXX](https://bugzilla.mozilla.org/show_bug.cgi?id=XXXXXXX) — Summary
 
 **Other notable changes:**
 - _Anything else worth calling out_
 
----
-
-## Assigned Bugs
-
-_Bugs currently assigned to a team member:_
-
-| Bug | Summary | Assignee | Status |
-|-----|---------|----------|--------|
-| [XXXXXXX](https://bugzilla.mozilla.org/show_bug.cgi?id=XXXXXXX) | Summary | engineer@mozilla.com | NEW / ASSIGNED |
-
----
-
-## Project Development
-
 ### External Dependencies
 
-_Tests suspected to be WPT issues rather than Firefox bugs:_
+_Tests suspected to be WPT or spec issues rather than Firefox bugs:_
 
 | Test | Issue / Bug | Notes |
 |------|-------------|-------|
 | `/webrtc/path/to/test.html` | [wpt#XXXXX](https://github.com/web-platform-tests/wpt/issues/XXXXX) | Notes |
+
+### Gap Analysis
+
+**Tests with no known bug or issue filed:**
+- `/webrtc/path/to/test.html`
+
+**Tests with multi-browser failures (monitoring):**
+- `/webrtc/path/to/test.html` — fails in Firefox + Chrome/Safari
+
+**Resources found in new bug comments**
+- Resources found worth triaging.
+
+---
+
+## Project Planning
 
 ### Priority Assessment
 
@@ -82,17 +95,6 @@ _Bugs affecting multiple test files:_
 | Bug | Summary | Files Impacted | Subtests Impacted |
 |-----|---------|----------------|-------------------|
 | [XXXXXXX](https://bugzilla.mozilla.org/show_bug.cgi?id=XXXXXXX) | Summary | N | N |
-
-### Gap Analysis
-
-**Tests with no known bug or issue filed:**
-- `/webrtc/path/to/test.html`
-
-**Tests with multi-browser failures (monitoring):**
-- `/webrtc/path/to/test.html` — fails in Firefox + Chrome/Safari
-
-**Resources found in new bug comments**
-- Resources found worth triaging.
 
 ### Experimental Dependency Graph
 
