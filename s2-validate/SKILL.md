@@ -84,6 +84,14 @@ In some instances, the bug in question may be security-sensitive and may not be 
 
 If an API key is provided, ensure that it is used securely and only for the duration of the current session. Do not cache or store the API key beyond this session.
 
+#### Bounty Reccomendations
+
+If, in your opinionn, a security report warrants a bounty payout and has not already been tagged as such, please make the recommendation to enable that in the report.
+
+However, bounty reccomendations should only be made when there is an **external** reporter who has provided sufficient information to make a strong case for the severity and impact of the issue.  Any reporter with a Mozilla email address or an internal affiliation should not be considered an external reporter for the purposes of bounty reccomendations, as they may have access to internal information and resources that external reporters do not.
+
+Also, if you find that a report mentions "clauditor", be aware that "clauditor" is an internal tool in use by our security team, so if a bounty reccomendation would be based solely upon its mention in the report, this would not be sufficient to qualify for a bounty paytou.  (In fact, we are using this internal tool to AVOID having these issues discovered externally and being liable for a bounty.)
+
 #### Bugzilla Access Rules
 
 - Cache fetched bug data in-session to avoid re-fetching the same bug ID within one triage run.
