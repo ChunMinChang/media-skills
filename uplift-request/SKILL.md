@@ -275,33 +275,59 @@ case.
    bounds, overflow, use-after-free, free, UAF, heap*, or specific
    symbol/file names (`grain_synthesis.c`, `add_film_grain_run`,
    etc.). Strip the commit body entirely.
-5. **Before the first `moz-phab uplift` of the run, ask the user**
-   whether they want WIP (Changes Planned) or not-WIP (Needs Review).
-   Reuse the answer for every subsequent channel in the same run.
-   - **WIP (default, safer)**: moz-phab submits as "Changes Planned".
-     Release Managers are **not** notified until the user completes
-     the lando uplift form (or flips WIP off explicitly). Use this
-     when the user still wants to eyeball the Phabricator revision
-     before it goes live.
-   - **Not-WIP**: pass `--no-wip` on the moz-phab command. The
-     revision is created in "Needs Review" immediately.
-6. Run `moz-phab uplift --train <train> <base-rev> <tip-rev>`,
-   appending `--no-wip` if the user asked for not-WIP:
+5. **Default to `--no-wip` (Needs Review on creation).** Do not use
+   moz-phab's WIP/Changes-Planned default for uplifts. Going
+   `--no-wip` from the start is what gets the BMO
+   `approval-mozilla-<train>?` flag set automatically, because BMO's
+   Phab→BMO sync only runs the flag-creation block when
+   `is_new=true` and the revision is in `needs-review` (not
+   `changes-planned`) at the moment of attachment creation. WIP
+   submissions miss that window and the flag has to be set
+   manually afterwards. WIP would only be "safer" if you wanted to
+   eyeball the Phab revision before Release Managers see it —
+   but Release Managers aren't added as blocking reviewers until
+   the lando form is submitted, so WIP buys nothing in practice
+   and costs the auto-flag.
+6. Run `moz-phab uplift --train <train> --no-wip <base-rev> <tip-rev>`:
    ```bash
-   moz-phab uplift --train firefox-esr140 upstream/esr140 HEAD
-   # or:
    moz-phab uplift --train firefox-esr140 --no-wip upstream/esr140 HEAD
    ```
    `--yes` skips interactive confirmation; `--no-rebase` is useful
    when the patch has already been adapted for the target branch.
-7. **If the revision was submitted WIP and the user later wants to
-   flip it to Needs Review**, the local commit must first carry a
+7. Open the lando URL printed at the end of the run
+   (`https://lando.moz.tools/uplift/request/?revisions=<rev-id>`) and
+   paste the Step 7 answer file into the nine-question uplift form —
+   completing the form is what actually requests `#release-managers`
+   review and posts the questionnaire to the bug. Do this for each
+   per-channel revision.
+8. **After the user submits the lando form, verify the approval
+   flag on the resulting BMO attachment.** With `--no-wip`
+   submissions the flag should already be present. Confirm:
+   ```bash
+   python3 .claude/skills/uplift-request/bmo-uplift-request \
+       <bug_id> --list
+   ```
+   For each per-channel attachment, look for
+   `approval-mozilla-<train>?` (e.g. `approval-mozilla-esr140?`
+   after a firefox-esr140 submission). If it's there, done.
+   If it's missing (which can still happen — see the WIP fallback
+   in step 9), set it manually using the script's flag-only mode:
+   ```bash
+   python3 .claude/skills/uplift-request/bmo-uplift-request \
+       <bug_id> --attachment <id> --<channel>          # e.g. --beta or --esr 140
+   ```
+   No `comment_file` argument means no comment in the PUT, so the
+   manual fix won't duplicate the lando-posted comment. Map
+   attachment ID → channel by reading the lando-created
+   attachments' `file_name` field, which has the form
+   `phabricator-D<rev>-url.txt`; cross-reference each D-rev against
+   the moz-phab output you captured at submission.
+9. **WIP fallback (legacy / corner case).** If for some reason a
+   revision was already submitted WIP and you need to flip it to
+   Needs Review, the local commit must first carry a
    `Differential Revision: https://phabricator.services.mozilla.com/D<id>`
-   trailer so moz-phab knows which revision to update. The initial
-   `moz-phab uplift` run does **not** add that trailer to the local
-   commit. If you rerun `moz-phab uplift ... --no-wip` without first
-   amending the commit to add the trailer, moz-phab will create a
-   **new** revision instead of updating the existing one. Fix:
+   trailer so moz-phab updates the existing revision instead of
+   creating a duplicate:
    ```bash
    git commit --amend -m "$(git log -1 --format=%s)
 
@@ -311,45 +337,11 @@ case.
    # If a duplicate got created first, abandon it:
    moz-phab abandon D<duplicate-id> --yes
    ```
-8. Open the lando URL printed at the end of the run
-   (`https://lando.moz.tools/uplift/request/?revisions=<rev-id>`) and
-   paste the Step 7 answer file into the nine-question uplift form —
-   completing the form is what actually sends the request to Release
-   Managers. Do this whether the revision was submitted WIP or
-   not-WIP; the lando form is a separate step from the moz-phab
-   submission.
-9. **After the user submits the lando form, verify the approval
-   flag on the resulting attachment.** Lando creates a new
-   Phabricator attachment on the bug (a secure one, for sec-\*
-   bugs) — that part is reliable. The companion step where Lando
-   sets the `approval-mozilla-<train>?` flag on that attachment is
-   **not** reliable in practice: we have observed cases (e.g. bug
-   2028266, firefox-beta and firefox-esr140 in 2026-04) where
-   Lando created the attachment but left `flags: []`. Always
-   re-list and check; never assume.
-   ```bash
-   python3 .claude/skills/uplift-request/bmo-uplift-request \
-       <bug_id> --list
-   ```
-   For each per-channel attachment Lando created, inspect its
-   flags. If the expected flag (e.g. `approval-mozilla-esr140?`
-   after a firefox-esr140 submission) is present, you're done.
-   If it's missing — even if the user confirms they clicked submit
-   on the lando form — set it manually using the script's
-   flag-only mode (no comment-file argument; comment was already
-   posted by lando):
-   ```bash
-   python3 .claude/skills/uplift-request/bmo-uplift-request \
-       <bug_id> --attachment <id> --<channel>          # e.g. --beta or --esr 140
-   ```
-   The script omits the comment field from the PUT when no
-   `comment_file` is supplied, so this won't duplicate the lando
-   comment. Re-run `--list` afterwards to confirm the flag now
-   shows on the attachment. Map attachment ID → channel by reading
-   the attachment data: lando-created Phab attachments have
-   `file_name` like `phabricator-D<rev>-url.txt` whose body is the
-   D-rev URL — match each attachment's D-rev to the moz-phab
-   uplift output you captured earlier.
+   The flip itself does **not** retroactively trigger BMO's
+   flag-creation block (BMO looks up the changer in the
+   reviewer list, finds the patch author isn't a reviewer, and
+   returns early without setting the flag). So after a flip you
+   still need step 8's manual flag-set fallback.
 
 **Reusing one worktree for several channels.** Fine — just create a
 fresh `bug-<bug_id>-<channel>` branch off each target tip. Cherry-pick
