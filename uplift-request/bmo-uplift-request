@@ -402,15 +402,15 @@ def main():
     if args.obsoletes:
         parser.error("--obsolete is only valid with --attach")
 
-    if not args.list_attachments:
-        if not args.comment_file:
-            parser.error("comment_file is required (unless using --list "
-                         "or --attach)")
-
     flag_names = [] if args.list_attachments else build_flag_names(args)
     if not args.list_attachments and not flag_names:
         parser.error("at least one of --beta, --release, --esr NN, or "
                      "--flag NAME is required")
+
+    # comment_file is optional in flag-only mode (e.g. when Lando created
+    # the BMO attachment but didn't set the approval flags, and posting the
+    # questionnaire as a comment would just duplicate the lando-form text).
+    flag_only = (not args.list_attachments and not args.comment_file)
 
     api_key = require_api_key()
 
@@ -418,14 +418,16 @@ def main():
         list_attachments(args.bug_id, api_key)
         return
 
-    if args.comment_file == "-":
-        comment = sys.stdin.read()
-    else:
-        with open(args.comment_file) as f:
-            comment = f.read()
-    if not comment.strip():
-        print("error: comment file is empty", file=sys.stderr)
-        sys.exit(1)
+    comment = ""
+    if not flag_only:
+        if args.comment_file == "-":
+            comment = sys.stdin.read()
+        else:
+            with open(args.comment_file) as f:
+                comment = f.read()
+        if not comment.strip():
+            print("error: comment file is empty", file=sys.stderr)
+            sys.exit(1)
 
     if args.attachment:
         attachment_id = args.attachment
@@ -446,28 +448,34 @@ def main():
                   f"{name}{status}", file=sys.stderr)
 
     payload = {
-        "comment": comment,
-        "is_markdown": True,
         "flags": [{"name": name, "status": "?"} for name in flag_names],
     }
+    if not flag_only:
+        payload["comment"] = comment
+        payload["is_markdown"] = True
 
     if args.dry_run:
         label = f"{att_rev} " if att_rev else ""
         print(f"[dry-run] PUT /rest/bug/attachment/{attachment_id} "
               f"({label}{att_summary})")
         print(f"  flags   = {', '.join(n + '?' for n in flag_names)}")
-        print(f"  comment = (is_markdown=True, {len(comment)} chars)")
-        preview = comment if len(comment) < 200 else comment[:197] + "..."
-        print("  --- comment preview ---")
-        for line in preview.splitlines():
-            print(f"  | {line}")
-        print("  --- end preview ---")
+        if flag_only:
+            print("  comment = (none, flag-only update)")
+        else:
+            print(f"  comment = (is_markdown=True, {len(comment)} chars)")
+            preview = comment if len(comment) < 200 else comment[:197] + "..."
+            print("  --- comment preview ---")
+            for line in preview.splitlines():
+                print(f"  | {line}")
+            print("  --- end preview ---")
         return
 
     api("PUT", f"bug/attachment/{attachment_id}",
         data=payload, api_key=api_key)
     joined = ", ".join(f"{n}?" for n in flag_names)
-    print(f"{joined} set on attachment {attachment_id} ({att_summary})")
+    suffix = "" if flag_only else " (comment posted)"
+    print(f"{joined} set on attachment {attachment_id} ({att_summary})"
+          f"{suffix}")
     print(f"{BMO}/show_bug.cgi?id={args.bug_id}")
 
 

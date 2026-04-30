@@ -318,24 +318,38 @@ case.
    Managers. Do this whether the revision was submitted WIP or
    not-WIP; the lando form is a separate step from the moz-phab
    submission.
-9. **After the user submits the lando form, verify — don't
-   duplicate — the approval flag on the resulting attachment.**
-   Lando creates a new Phabricator attachment on the bug (a secure
-   one, for sec-\* bugs) and automatically sets the correct
-   `approval-mozilla-<train>?` flag on it. Re-list attachments and
-   confirm:
+9. **After the user submits the lando form, verify the approval
+   flag on the resulting attachment.** Lando creates a new
+   Phabricator attachment on the bug (a secure one, for sec-\*
+   bugs) — that part is reliable. The companion step where Lando
+   sets the `approval-mozilla-<train>?` flag on that attachment is
+   **not** reliable in practice: we have observed cases (e.g. bug
+   2028266, firefox-beta and firefox-esr140 in 2026-04) where
+   Lando created the attachment but left `flags: []`. Always
+   re-list and check; never assume.
    ```bash
    python3 .claude/skills/uplift-request/bmo-uplift-request \
        <bug_id> --list
    ```
-   Expect a new Phab attachment with the appropriate flag already
-   present (e.g., `approval-mozilla-esr140?` after submitting the
-   firefox-esr140 lando form). Do **not** set the flag a second time
-   via `bmo-uplift-request` — that's 5b's job; in 5a Lando owns the
-   flag. If the expected flag is missing, confirm the user actually
-   clicked submit on the lando form (it's easy to close the tab
-   early), then fall back to `bmo-uplift-request --attachment <id>
-   --<channel>` to set it manually.
+   For each per-channel attachment Lando created, inspect its
+   flags. If the expected flag (e.g. `approval-mozilla-esr140?`
+   after a firefox-esr140 submission) is present, you're done.
+   If it's missing — even if the user confirms they clicked submit
+   on the lando form — set it manually using the script's
+   flag-only mode (no comment-file argument; comment was already
+   posted by lando):
+   ```bash
+   python3 .claude/skills/uplift-request/bmo-uplift-request \
+       <bug_id> --attachment <id> --<channel>          # e.g. --beta or --esr 140
+   ```
+   The script omits the comment field from the PUT when no
+   `comment_file` is supplied, so this won't duplicate the lando
+   comment. Re-run `--list` afterwards to confirm the flag now
+   shows on the attachment. Map attachment ID → channel by reading
+   the attachment data: lando-created Phab attachments have
+   `file_name` like `phabricator-D<rev>-url.txt` whose body is the
+   D-rev URL — match each attachment's D-rev to the moz-phab
+   uplift output you captured earlier.
 
 **Reusing one worktree for several channels.** Fine — just create a
 fresh `bug-<bug_id>-<channel>` branch off each target tip. Cherry-pick
