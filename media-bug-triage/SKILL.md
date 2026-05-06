@@ -149,7 +149,8 @@ Fetch the initial bug report, including:
 - Itemized crash signatures
 - Current status, product, component, keywords, whiteboard tags, pending needinfo flags
 - Duplicate and See Also related fields (typically lists of additional related bugs)
-- Bug dependency related fields
+- The regressed_by field indicating the bug is regression from another checkin.
+- Bug dependency related fields and bugs (see also, depends on, and blocks).
 - Change history via `/rest/bug/{id}/history` — fetched in parallel with the above. This records all field changes (who changed what, from what value, to what value, and when). Pay particular attention to:
   - Security group additions or removals (e.g. `firefox-core-security`, `core-security`, `media-core-security`)
   - Product or component reclassifications
@@ -393,10 +394,9 @@ Always write the report to a `./reports` sub-directory with the filename `bug-{B
 Prompt for next steps:
 1. Copy the detailed report to the clipboard.
 2. Copy the shorter summary to the clipboard.
-3. Ask a question (format: `3, question text`).
-4. Continue with analysis.
-5. Triage another bug.
-6. Exit skill.
+3. Copy the feedback request text to the clipboard.
+3. Ask a question.
+4. Exit skill.
 
 - If option 1 or 2: copy to clipboard and re-prompt.
 - If option 3: prompt for a question about the bug or analysis, provide an answer, then return to this prompt.
