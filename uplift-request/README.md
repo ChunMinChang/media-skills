@@ -34,7 +34,9 @@ May run standalone (sec-moderate, non-security regressions) or after the
 2. **`bmo-uplift-request` script** — ships with this skill; used for the
    auth check, listing attachments, uploading raw patches, and posting the
    uplift comment with approval flags. Requires Python 3.8+ (stdlib only,
-   no extra packages).
+   no extra packages). Imports `bmo_client` from the sibling `shared/`
+   directory, which is deployed automatically with the media-skills
+   bundle.
 
 3. **[moz-phab](https://moz-conduit.readthedocs.io/en/latest/phabricator-user.html)**
    (optional) — used by the submit step when the patch isn't already on

@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Print whether a Bugzilla API key is available (never prints the key)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from bmo_client import check_auth
+
+if __name__ == "__main__":
+    check_auth()

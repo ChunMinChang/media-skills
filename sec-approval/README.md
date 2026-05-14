@@ -29,7 +29,9 @@ on the right Phabricator attachment.
 
 2. **`bmo-sec-approval` script** — ships with this skill; used for the
    auth check, listing Phabricator attachments on the bug, and posting the
-   request. Requires Python 3.8+ (stdlib only, no extra packages).
+   request. Requires Python 3.8+ (stdlib only, no extra packages). Imports
+   `bmo_client` from the sibling `shared/` directory, which is deployed
+   automatically with the media-skills bundle.
 
 ### Bugzilla API key setup
 

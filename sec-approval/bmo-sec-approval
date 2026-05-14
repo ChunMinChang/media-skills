@@ -17,139 +17,29 @@ API key resolution (first match wins):
 """
 
 import argparse
-import base64
 import json
 import os
-import re
 import sys
-import urllib.error
-import urllib.request
 
-BMO = "https://bugzilla.mozilla.org"
-PHAB = "https://phabricator.services.mozilla.com"
-BMO_CONFIG = os.path.expanduser("~/.config/bugzilla/config.toml")
-BMO_TO_MD_CONFIG = os.path.expanduser("~/.config/bmo-to-md/config.toml")
-
-
-def _read_toml_api_key(path):
-    """Read api_key from a TOML file. Returns the value or None."""
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("api_key"):
-                    _, _, val = line.partition("=")
-                    val = val.strip().strip('"').strip("'")
-                    if val:
-                        return val
-    except OSError:
-        pass
-    return None
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
+try:
+    from bmo_client import (
+        BMO, PHAB,
+        check_auth, ensure_auth,
+        api, extract_phab_revision, format_flags,
+        get_attachments, find_single_phab_attachment,
+    )
+except ImportError as e:
+    print(f"error: cannot import bmo_client from sibling shared/ directory: "
+          f"{e}", file=sys.stderr)
+    print("hint: install the full media-skills bundle, not just this skill",
+          file=sys.stderr)
+    sys.exit(2)
 
 
-def resolve_api_key():
-    """Resolve BMO API key without ever printing it.
-
-    Checks, in order:
-      1. $BMO_API_KEY environment variable
-      2. api_key in ~/.config/bugzilla/config.toml
-      3. api_key in ~/.config/bmo-to-md/config.toml
-    Returns (key, source) or (None, None).
-    """
-    env = os.environ.get("BMO_API_KEY", "").strip()
-    if env:
-        return env, "$BMO_API_KEY"
-    for path in (BMO_CONFIG, BMO_TO_MD_CONFIG):
-        val = _read_toml_api_key(path)
-        if val:
-            return val, path
-    return None, None
-
-
-def require_api_key():
-    key, source = resolve_api_key()
-    if not key:
-        print("error: no Bugzilla API key found", file=sys.stderr)
-        print("Store your key in " + BMO_CONFIG
-              + " or set $BMO_API_KEY", file=sys.stderr)
-        sys.exit(1)
-    return key
-
-
-def check_auth():
-    """Print whether an API key is available (never prints the key)."""
-    key, source = resolve_api_key()
-    if key:
-        print(f"OK: API key found via {source}")
-    else:
-        print("No API key found")
-        print(f"Store your key in {BMO_CONFIG} or set $BMO_API_KEY")
-        sys.exit(1)
-
-
-def api(method, path, data=None, api_key=None):
-    url = f"{BMO}/rest/{path}"
-    body = json.dumps(data).encode() if data else None
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["X-BUGZILLA-API-KEY"] = api_key
-    req = urllib.request.Request(url, data=body, headers=headers,
-                                method=method)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode(errors="replace")
-        print(f"error: {method} /rest/{path} -> HTTP {e.code}\n{err_body}",
-              file=sys.stderr)
-        sys.exit(1)
-    except urllib.error.URLError as e:
-        print(f"error: {e.reason}", file=sys.stderr)
-        sys.exit(1)
-
-
-def extract_phab_revision(attachment):
-    """Extract Phabricator revision ID (e.g. D290715) from attachment data."""
-    # Try the base64-encoded data field first — for text/x-phabricator-request
-    # attachments this is typically just the Phabricator URL.
-    data = attachment.get("data", "")
-    if data:
-        try:
-            decoded = base64.b64decode(data).decode(errors="replace")
-            m = re.search(r'(D\d+)', decoded)
-            if m:
-                return m.group(1)
-        except Exception:
-            pass
-    # Fall back to the summary field.
-    summary = attachment.get("summary", "")
-    m = re.search(r'(D\d+)', summary)
-    if m:
-        return m.group(1)
-    return None
-
-
-def format_flags(attachment):
-    flags = attachment.get("flags", [])
-    if not flags:
-        return ""
-    return ", ".join(f"{f['name']}{f['status']}" for f in flags)
-
-
-def get_phab_attachments(bug_id, api_key):
-    result = api("GET", f"bug/{bug_id}/attachment", api_key=api_key)
-    attachments = result.get("bugs", {}).get(str(bug_id), [])
-    return [
-        a for a in attachments
-        if a.get("content_type") == "text/x-phabricator-request"
-        and not a.get("is_obsolete")
-    ]
-
-
-def list_attachments(bug_id, api_key):
-    phab = get_phab_attachments(bug_id, api_key)
+def list_attachments(bug_id):
+    phab = get_attachments(bug_id, phab_only=True, include_data=True)
     if not phab:
         print(f"No active Phabricator attachments on bug {bug_id}")
         return
@@ -162,27 +52,6 @@ def list_attachments(bug_id, api_key):
         if flags:
             print(f"    Flags: {flags}")
         print()
-
-
-def find_phabricator_attachment(bug_id, api_key):
-    phab = get_phab_attachments(bug_id, api_key)
-    if not phab:
-        print(f"error: no active Phabricator attachments found on bug "
-              f"{bug_id}", file=sys.stderr)
-        print("hint: specify --attachment <id> manually", file=sys.stderr)
-        sys.exit(1)
-    if len(phab) > 1:
-        print(f"Multiple active Phabricator attachments on bug {bug_id}:",
-              file=sys.stderr)
-        for a in phab:
-            rev = extract_phab_revision(a) or "?"
-            flags = format_flags(a)
-            print(f"  {a['id']}: {rev}  {a.get('summary', '')}  [{flags}]",
-                  file=sys.stderr)
-        print("\nhint: specify --attachment <id> or use --list",
-              file=sys.stderr)
-        sys.exit(1)
-    return phab[0]
 
 
 def main():
@@ -212,11 +81,11 @@ def main():
     if not args.list_attachments and not args.comment_file:
         parser.error("comment_file is required (unless using --list)")
 
-    api_key = require_api_key()
+    ensure_auth()
 
     # List mode — print attachments and exit
     if args.list_attachments:
-        list_attachments(args.bug_id, api_key)
+        list_attachments(args.bug_id)
         return
 
     # Read comment text
@@ -232,11 +101,10 @@ def main():
     # Resolve attachment
     if args.attachment:
         attachment_id = args.attachment
-        result = api("GET", f"bug/attachment/{attachment_id}",
-                      api_key=api_key)
+        result = api("GET", f"bug/attachment/{attachment_id}")
         att = result.get("attachments", {}).get(str(attachment_id), {})
     else:
-        att = find_phabricator_attachment(args.bug_id, api_key)
+        att = find_single_phab_attachment(args.bug_id, include_data=True)
         attachment_id = att["id"]
     att_summary = att.get("summary", f"attachment {attachment_id}")
     att_rev = extract_phab_revision(att) or ""
@@ -262,8 +130,7 @@ def main():
 
     # Post comment and set sec-approval? in a single request so Bugzilla
     # creates one comment entry (not two).
-    api("PUT", f"bug/attachment/{attachment_id}",
-        data=payload, api_key=api_key)
+    api("PUT", f"bug/attachment/{attachment_id}", data=payload)
     print(f"sec-approval? set on attachment {attachment_id} ({att_summary})")
     print(f"{BMO}/show_bug.cgi?id={args.bug_id}")
 
