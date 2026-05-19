@@ -28,6 +28,54 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import triage_paths
 
 BMO_URL = "https://bugzilla.mozilla.org/show_bug.cgi?id={}"
+SEARCHFOX_URL = "https://searchfox.org/mozilla-central/source/{}"
+SOCORRO_SIGNATURE_URL = (
+    "https://crash-stats.mozilla.org/signatures/?signature={}"
+)
+
+# Bug groups that mean the bug is security-restricted. When *referencing*
+# such a bug we link only and omit summary text (see Analysis Report Format
+# safety rule). For the triage bug itself we still emit its summary but
+# flag the restricted status so the reader handles it carefully.
+SECURITY_GROUP_PREFIXES = ("sec-",)
+SECURITY_GROUPS = (
+    "firefox-core-security",
+    "core-security",
+    "media-core-security",
+)
+
+
+def _bmo_link(bug_id):
+    """Markdown link for a Bugzilla bug. Use for every bug-id reference."""
+    return "[{bid}]({url})".format(bid=bug_id, url=BMO_URL.format(bug_id))
+
+
+def _searchfox_link(path):
+    """Markdown link to a searchfox source file."""
+    return "[{p}]({url})".format(p=path, url=SEARCHFOX_URL.format(path))
+
+
+def _socorro_link(signature):
+    """Markdown link to the Socorro signature search for a crash signature."""
+    import urllib.parse
+
+    encoded = urllib.parse.quote(signature, safe="")
+    return "[{s}]({url})".format(
+        s=signature, url=SOCORRO_SIGNATURE_URL.format(encoded)
+    )
+
+
+def _is_security_bug(bug):
+    """True if the bug carries any security-restriction group."""
+    groups = bug.get("groups") or []
+    for g in groups:
+        name = g if isinstance(g, str) else g.get("name", "")
+        if name in SECURITY_GROUPS:
+            return True
+        for prefix in SECURITY_GROUP_PREFIXES:
+            if name.startswith(prefix):
+                return True
+    return False
 
 # ---------------------------------------------------------------------------
 # Section helpers
@@ -105,38 +153,51 @@ def render(bug, pending, scope, usage, codebase_findings):
 
     sections = []
 
+    is_security = _is_security_bug(bug)
+
     # Header
     sections.append(
         "# Bug {bid} Triage Analysis\n\n"
         "**Generated:** {date}  \n"
-        "**Bug URL:** {url}\n".format(
+        "**Bug:** {bug_link}\n".format(
             bid=bug_id,
             date=_today(),
-            url=BMO_URL.format(bug_id),
+            bug_link=_bmo_link(bug_id),
         )
     )
 
     # Bug Information
-    sections.append(
-        "## Bug Information\n\n"
-        "- **Summary:** {summary}\n"
-        "- **Status:** {status}\n"
-        "- **Product:** {product}\n"
-        "- **Component:** {component}\n"
-        "- **Created:** {created}\n"
-        "- **Severity:** {severity}\n"
-        "- **Priority:** {priority}\n"
-        "- **Scope:** {scope}\n".format(
-            summary=_safe(title),
-            status=_safe(bug.get("status")),
-            product=_safe(bug.get("product")),
-            component=_safe(bug.get("component")),
-            created=_safe(bug.get("creation_time") or bug.get("created")),
-            severity=_safe(bug.get("severity")),
-            priority=_safe(bug.get("priority")),
-            scope=_safe(scope),
+    info_lines = [
+        "## Bug Information\n",
+        "- **Summary:** {}".format(_safe(title)),
+        "- **Status:** {}".format(_safe(bug.get("status"))),
+        "- **Product:** {}".format(_safe(bug.get("product"))),
+        "- **Component:** {}".format(_safe(bug.get("component"))),
+        "- **Created:** {}".format(
+            _safe(bug.get("creation_time") or bug.get("created"))
+        ),
+        "- **Severity:** {}".format(_safe(bug.get("severity"))),
+        "- **Priority:** {}".format(_safe(bug.get("priority"))),
+        "- **Scope:** {}".format(_safe(scope)),
+    ]
+    if is_security:
+        info_lines.append(
+            "- **Security:** restricted (handle confidentially; do not "
+            "include summary text when referencing this bug elsewhere)"
         )
-    )
+    if bug.get("cf_crash_signature"):
+        # Each signature on its own line so the Socorro link is readable.
+        sigs = [
+            s.strip()
+            for s in str(bug["cf_crash_signature"]).splitlines()
+            if s.strip()
+        ]
+        if sigs:
+            info_lines.append(
+                "- **Crash signatures:** "
+                + ", ".join(_socorro_link(s) for s in sigs)
+            )
+    sections.append("\n".join(info_lines) + "\n")
 
     # Classification
     sections.append(
@@ -147,12 +208,14 @@ def render(bug, pending, scope, usage, codebase_findings):
 
     # Regression timeline (only if signal present)
     if bug.get("regressed_by") or bug.get("cf_regressing_bug"):
+        regressed = bug.get("regressed_by") or []
+        if regressed:
+            rendered = ", ".join(_bmo_link(b) for b in regressed)
+        else:
+            rendered = _safe(bug.get("cf_regressing_bug"))
         sections.append(
             "## Regression Timeline\n\n"
-            "- **regressed_by:** {}\n".format(
-                ", ".join(str(b) for b in (bug.get("regressed_by") or []))
-                or _safe(bug.get("cf_regressing_bug"))
-            )
+            "- **regressed_by:** {}\n".format(rendered)
         )
 
     # Assessment
@@ -171,7 +234,9 @@ def render(bug, pending, scope, usage, codebase_findings):
     if findings:
         lines = ["## Codebase Investigation\n"]
         for f in findings:
-            lines.append("- **{}** — {}".format(f.get("path", "?"), f.get("note", "")))
+            path = f.get("path", "?")
+            link = _searchfox_link(path) if path and path != "?" else path
+            lines.append("- {} — {}".format(link, f.get("note", "")))
         sections.append("\n".join(lines) + "\n")
 
     # Draft Response
@@ -192,12 +257,14 @@ def render(bug, pending, scope, usage, codebase_findings):
     for target in pending.get("ni_targets") or []:
         actions.append("needinfo? {}".format(target))
     if pending.get("dupe_of"):
-        actions.append("Resolve DUPLICATE of {}".format(pending["dupe_of"]))
+        actions.append("Resolve DUPLICATE of {}".format(_bmo_link(pending["dupe_of"])))
     if pending.get("resolution"):
         actions.append("Resolve {}".format(pending["resolution"]))
     if pending.get("blocks_add"):
         actions.append(
-            "Add blockers: {}".format(", ".join(str(b) for b in pending["blocks_add"]))
+            "Add blockers: {}".format(
+                ", ".join(_bmo_link(b) for b in pending["blocks_add"])
+            )
         )
     if actions:
         sections.append(

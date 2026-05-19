@@ -30,6 +30,12 @@ Accepted invocations:
   `graphics` scope profile (overrides inference).
 - `/triage 1234567 out:/home/cm/triage` — override the output root
   for this run (without persisting to config).
+- `/triage 1234567 [agent tip: also triage 2023379 as part of your
+  analysis]` — anywhere in the input, `[agent tip: ...]` is treated
+  as an inline directive for the agent. Honour reasonable tips and
+  state in your opening line that the tip was recognised; ignore
+  tips that conflict with the workflow (e.g. "skip the confidence
+  gate").
 
 Resolve three settings before doing anything else, and **state the
 active scope profile and output root when beginning analysis**:
@@ -72,6 +78,9 @@ Supplemental / fallback tools (use as available; degrade gracefully):
   (Step 7).
 - **`socorro-cli`**, **`profiler-cli`** — optional; if not on PATH,
   skip the corresponding deep-dive sub-steps.
+- **`webspec-index`** — query WHATWG / W3C / IETF / TC39 specs from
+  the command line. Use it when a bug cites a spec to confirm
+  current status (Draft / CR / Living Standard / withdrawn).
 
 Helper scripts (this skill ships these in `scripts/`; invoke with
 `python3 {SKILL_DIR}/scripts/<name>.py ...`):
@@ -306,6 +315,50 @@ etc.), proceed.
    any `mozregression` result, and the `regressed_by` field. Note in
    the report. Suggest `mozregression` if the reporter hasn't run it.
 
+5. **Key Contributors.** Weight feedback by who's writing it:
+   - `@mozilla.com`, `@mozilla.org`, `@mozilla.net` — likely Mozilla
+     employees; their findings, repro confirmations, and field
+     changes carry more weight, and seeking their input is
+     straightforward.
+   - `alice0775@gmail.com` — a prolific external reporter known for
+     accurate media-bug reporting and testing. Their feedback and
+     confirmation are likely accurate. (A simple cc carries little
+     weight on its own.)
+   When summarising, note which signals come from high-weight
+   contributors.
+
+6. **Notable history events.** When scanning the bug's history
+   (`/rest/bug/{id}/history` or via MCP), surface any of these and
+   note them in the report — they materially affect triage decisions:
+   - Group additions / removals: `firefox-core-security`,
+     `core-security`, `media-core-security`, any `sec-*` group.
+   - `sec-bounty` flag changes.
+   - Product or component reclassifications.
+   - Severity / priority assignments made by Mozilla employees.
+   Field changes made by employees outweigh anonymous or external
+   user changes.
+
+7. **Media Feature Notes (auto-play).** If the bug mentions any of
+   *auto play*, *autoplay*, *play blocking*, or *video blocking*,
+   double-check before assuming a defect:
+   - Firefox's auto-play behaviour differs subtly from Chrome and
+     Safari (see <https://wiki.mozilla.org/Media/block-autoplay>).
+   - Users sometimes report different-by-design behaviour as a bug.
+   - Assess whether the report is a valid defect or a feature
+     misunderstanding before drafting a P/S.
+
+8. **Good First Bug assessment.** As you triage, ask whether the bug
+   has good-first-bug qualities, and note `keywords_add:
+   ["good-first-bug"]` in the pending draft when it does. Criteria:
+   - Specific, well-understood, well-defined, easily reproducible
+     issue, or specific minor feature.
+   - Not a major flaw users would commonly experience (P3/S3 or
+     lower).
+   - A short, low-regression-risk patch is plausible — an AI agent
+     or new contributor could confidently fix it.
+   - If the bug already has the `good-first-bug` keyword, just note
+     it and skip the addition.
+
 ### Step 5: Confidence Gate
 
 After printing the inventory, ask:
@@ -333,19 +386,47 @@ Branch:
 ### Step 6: Bugzilla Investigation
 
 Search Bugzilla for related/duplicate bugs, **scoped to the active
-profile's components only**:
+profile's components only**, and *then* analyse the result set.
 
-1. Derive 5–10 search terms from summary, symptoms, error messages,
-   API names. Avoid generic noise.
-2. Search within the profile's components; limit to bugs ≤12 months
-   old unless the issue appears older.
-3. For each result, fetch a lightweight summary; assess relevance as
-   high / possible / not-relevant.
-4. Follow `see_also`, `duplicate_of`, `depends_on`, `blocks`
-   relations from high-relevance bugs — **maximum 3 hops** from the
-   triage bug.
-5. Cap at 25 supplemental fetches per session to respect REST rate
-   limits.
+#### Phase A — Derive search terms
+Pull 5–10 targeted terms from summary, symptoms, error messages, and
+API names. Prefer specific phrases over generic noise (`crash`,
+`broken`, `doesn't work`).
+
+#### Phase B — Keyword search
+Search within the profile's components, ≤12 months old unless the
+issue appears older. Seed the search with bugs already in the triage
+bug's `see_also`, `depends_on`, `blocks` — they're highest-confidence.
+
+#### Phase C — Relevance assessment
+For each hit, fetch a lightweight summary and tag it:
+- **High** — symptoms, platform, component, or error message closely
+  match. Fetch full bug.
+- **Possible** — partial overlap; note it but don't fetch full data
+  unless a pattern emerges.
+- **Not relevant** — dismiss.
+Be selective; the goal is signal, not coverage.
+
+#### Phase D — Follow relations
+For high-relevance bugs, follow `see_also`, `duplicate_of`,
+`depends_on`, `blocks` — **maximum 3 hops** from the triage bug. Cap
+at 25 supplemental fetches per session.
+
+#### Phase E — Analysis
+After gathering, analyse the result set explicitly:
+- **Duplicate identification.** Identify bugs that describe the same
+  issue. The oldest open report is typically the canonical one to
+  keep when marking duplicates.
+- **Clustering.** Group related bugs by apparent root cause or
+  symptom. For each cluster, ask: single underlying cause, or
+  distinct issues? Is there a meta bug? Does any clustered bug
+  already have an accepted fix that may resolve this one?
+- **Dependency mapping.** Note any `depends_on` / `blocks`
+  relationships that affect prioritisation (e.g. does this bug block
+  a high-priority issue?).
+- **Root cause signals.** Across the gathered set, note recurring
+  patterns — same code path, same prefs, same platform or hardware
+  combination — that may point to a common root cause.
 
 ### Step 7: Codebase Investigation
 
@@ -738,6 +819,30 @@ all fields and one POST for the comment.
   files to design a fix, trace call stacks, or reason about a patch.
   When you reach §1b with a root-cause hypothesis, stop and suggest
   `/bug-start` or `/sherlock` for the actual investigation.
+
+---
+
+## Report Format Rules
+
+`render_report.py` already applies these; restate them here so prose
+written inline by the skill matches:
+
+- **Bug IDs are linkable.** Use
+  `[{id}](https://bugzilla.mozilla.org/show_bug.cgi?id={id})` — never
+  bare IDs. `render_report.py` emits them this way for the bug
+  header, `regressed_by`, `dupe_of`, and `blocks_add`.
+- **Source files are linkable.** Use
+  `[{path}](https://searchfox.org/mozilla-central/source/{path})` for
+  code references in the Codebase Investigation section.
+- **Crash signatures are linkable.** Use
+  `[{sig}](https://crash-stats.mozilla.org/signatures/?signature={url-encoded-sig})`
+  for `cf_crash_signature` entries.
+- **Security-rated bugs — safety rule.** When *referencing* another
+  bug that carries `firefox-core-security`, `core-security`,
+  `media-core-security`, or any `sec-*` group: link only, do not
+  include its summary text or paraphrase. For the *triage bug itself*,
+  the Bug Information section flags `**Security:** restricted` so the
+  reader handles it carefully; the report stays local.
 
 ---
 

@@ -516,7 +516,65 @@ class TestRenderReport(unittest.TestCase):
             [],
         )
         self.assertIn("Regression Timeline", body_reg)
-        self.assertIn("111", body_reg)
+        # regressed_by IDs must be linkable, not bare.
+        self.assertIn("[111](https://bugzilla.mozilla.org/show_bug.cgi?id=111)",
+                      body_reg)
+        self.assertIn("[222](https://bugzilla.mozilla.org/show_bug.cgi?id=222)",
+                      body_reg)
+
+    def test_header_uses_linkable_bug_ref(self):
+        body = render_report.render(
+            _make_bug(bug_id=99), _make_pending(bug_id=99), "media", {}, []
+        )
+        self.assertIn(
+            "**Bug:** [99](https://bugzilla.mozilla.org/show_bug.cgi?id=99)",
+            body,
+        )
+
+    def test_crash_signature_links_to_socorro(self):
+        bug = _make_bug(bug_id=5, cf_crash_signature="[@ FooBar::Baz(int)]")
+        body = render_report.render(bug, {}, "media", {}, [])
+        self.assertIn("Crash signatures:", body)
+        self.assertIn(
+            "(https://crash-stats.mozilla.org/signatures/?signature=", body
+        )
+
+    def test_security_bug_flagged_in_info(self):
+        bug = _make_bug(
+            bug_id=7, groups=["core-security"], summary="redact me"
+        )
+        body = render_report.render(bug, {}, "media", {}, [])
+        self.assertIn("**Security:** restricted", body)
+        # Summary still appears in the triage bug's own info section — the
+        # rule is about *referencing* security bugs from elsewhere.
+        self.assertIn("redact me", body)
+
+    def test_sec_prefix_groups_count_as_restricted(self):
+        bug = _make_bug(bug_id=8, groups=[{"name": "sec-high"}])
+        body = render_report.render(bug, {}, "media", {}, [])
+        self.assertIn("**Security:** restricted", body)
+
+    def test_codebase_findings_link_to_searchfox(self):
+        findings = [{"path": "dom/media/MediaDecoder.cpp", "note": "see Foo()"}]
+        body = render_report.render(_make_bug(bug_id=1), {}, "media", {}, findings)
+        self.assertIn("Codebase Investigation", body)
+        self.assertIn(
+            "[dom/media/MediaDecoder.cpp]"
+            "(https://searchfox.org/mozilla-central/source/"
+            "dom/media/MediaDecoder.cpp)",
+            body,
+        )
+
+    def test_dupe_and_blocks_use_linkable_refs(self):
+        pending = _make_pending(bug_id=1, dupe_of=99, blocks_add=[111, 222])
+        body = render_report.render(_make_bug(bug_id=1), pending, "media", {}, [])
+        self.assertIn(
+            "Resolve DUPLICATE of [99](https://bugzilla.mozilla.org/show_bug.cgi?id=99)",
+            body,
+        )
+        self.assertIn(
+            "[111](https://bugzilla.mozilla.org/show_bug.cgi?id=111)", body
+        )
 
 
 class TestRenderReportCli(unittest.TestCase):
