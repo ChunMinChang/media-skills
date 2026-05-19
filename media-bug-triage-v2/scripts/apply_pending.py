@@ -15,6 +15,10 @@ On full success the pending file is removed and a record is appended to
 kept so the user can retry; retries are idempotent because already-set
 fields are detected via a fresh fetch and skipped.
 
+All HTTP work goes through ``../../shared/bmo_client.py``, which keeps
+the API key inside that module's process and never returns it. This
+script never sees, prints, or logs the key value.
+
 Exit codes:
     0 success
     1 generic failure
@@ -31,9 +35,67 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import bmo_rest
+sys.path.insert(
+    0,
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "shared"),
+)
+import bmo_client
 import pending_store
 import triage_paths
+
+
+# ---------------------------------------------------------------------------
+# BMO REST wrappers — translate bmo_client's sys.exit() failures into
+# exceptions so we can preserve partial-success semantics.
+# ---------------------------------------------------------------------------
+
+
+class TriageApplyError(Exception):
+    """A BMO REST call failed. bmo_client already wrote details to stderr."""
+
+
+def _api(method, path, data=None):
+    try:
+        return bmo_client.api(method, path, data)
+    except SystemExit as e:
+        raise TriageApplyError(
+            "{} /rest/{} failed (exit {})".format(method, path, e.code)
+        ) from e
+
+
+def _get_bug(bug_id):
+    result = _api("GET", "bug/{}".format(int(bug_id)))
+    bugs = result.get("bugs") or []
+    if not bugs:
+        raise TriageApplyError("bug {} not found or inaccessible".format(bug_id))
+    return bugs[0]
+
+
+def _post_comment(bug_id, comment):
+    return _api(
+        "POST",
+        "bug/{}/comment".format(int(bug_id)),
+        {"comment": comment, "is_private": False},
+    )
+
+
+def _set_fields(bug_id, fields):
+    if not fields:
+        raise ValueError("_set_fields: refusing to PUT an empty payload")
+    return _api("PUT", "bug/{}".format(int(bug_id)), fields)
+
+
+def _set_needinfo(bug_id, requestee):
+    return _api(
+        "PUT",
+        "bug/{}".format(int(bug_id)),
+        {
+            "flags": [
+                {"name": "needinfo", "status": "?", "requestee": requestee}
+            ]
+        },
+    )
+
 
 # ---------------------------------------------------------------------------
 # Field reconciliation
@@ -151,6 +213,19 @@ def _decision_from_branch(pending):
     return "applied"
 
 
+def _ensure_api_key():
+    """Require a BMO API key before doing any REST work.
+
+    bmo_client.ensure_auth() exits 1 on missing key. We catch that so we
+    can return our own exit code with a triage-flavoured message.
+    """
+    try:
+        bmo_client.ensure_auth()
+    except SystemExit:
+        return False
+    return True
+
+
 def run(bug_id, dry_run=False, assume_yes=False, stdin=None):
     pending = pending_store.load_pending(bug_id)
     if pending is None:
@@ -161,11 +236,19 @@ def run(bug_id, dry_run=False, assume_yes=False, stdin=None):
         )
         return 2
 
-    # Re-fetch (anonymous read works for public bugs).
-    api_key = bmo_rest.get_api_key()
+    # Apply implies writes, so the key must be present even for a dry run
+    # (the dry run still fetches the bug to validate the staleness check).
+    if not _ensure_api_key():
+        sys.stderr.write(
+            "apply_pending: no BMO API key found. Configure "
+            "~/.config/bugzilla/config.toml or set $BMO_API_KEY. Pending "
+            "draft preserved at {}.\n".format(pending_store.pending_path(bug_id))
+        )
+        return 3
+
     try:
-        bug = bmo_rest.get_bug(bug_id, api_key=api_key)
-    except bmo_rest.BMOError as e:
+        bug = _get_bug(bug_id)
+    except TriageApplyError as e:
         sys.stderr.write("apply_pending: fetch failed: {}\n".format(e))
         return 1
 
@@ -186,14 +269,6 @@ def run(bug_id, dry_run=False, assume_yes=False, stdin=None):
         )
         return 6
 
-    if not api_key:
-        sys.stderr.write(
-            "apply_pending: no BMO API key found. Set $BMO_API_KEY or "
-            "write ~/.config/bmo/api_key (chmod 600). Pending draft "
-            "preserved at {}.\n".format(pending_store.pending_path(bug_id))
-        )
-        return 3
-
     fields = build_field_payload(pending, bug)
     sys.stdout.write(render_plan(bug_id, fields, pending))
 
@@ -211,9 +286,9 @@ def run(bug_id, dry_run=False, assume_yes=False, stdin=None):
     # 1. Fields
     if fields:
         try:
-            bmo_rest.set_fields(bug_id, fields, api_key=api_key)
+            _set_fields(bug_id, fields)
             succeeded.append("set_fields")
-        except bmo_rest.BMOError as e:
+        except TriageApplyError as e:
             failed.append(("set_fields", str(e)))
             sys.stderr.write("apply_pending: set_fields failed: {}\n".format(e))
 
@@ -221,18 +296,18 @@ def run(bug_id, dry_run=False, assume_yes=False, stdin=None):
     comment = pending.get("comment") or ""
     if comment.strip():
         try:
-            bmo_rest.post_comment(bug_id, comment, api_key=api_key)
+            _post_comment(bug_id, comment)
             succeeded.append("post_comment")
-        except bmo_rest.BMOError as e:
+        except TriageApplyError as e:
             failed.append(("post_comment", str(e)))
             sys.stderr.write("apply_pending: post_comment failed: {}\n".format(e))
 
     # 3. Needinfo flags (one PUT per requestee — keeps reporting clean).
     for target in pending.get("ni_targets") or []:
         try:
-            bmo_rest.set_needinfo(bug_id, target, api_key=api_key)
+            _set_needinfo(bug_id, target)
             succeeded.append("set_needinfo:{}".format(target))
-        except bmo_rest.BMOError as e:
+        except TriageApplyError as e:
             failed.append(("set_needinfo:{}".format(target), str(e)))
             sys.stderr.write(
                 "apply_pending: set_needinfo({}) failed: {}\n".format(target, e)

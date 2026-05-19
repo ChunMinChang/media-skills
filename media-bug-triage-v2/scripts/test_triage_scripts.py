@@ -16,10 +16,15 @@ import tempfile
 import unittest
 from unittest import mock
 
-# Import the modules under test.
+# Import the modules under test. Skill scripts are siblings; the shared
+# bmo_client lives under ../../shared/ in the media-skills repo layout.
 sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(
+    0,
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "shared"),
+)
+import bmo_client
 import apply_pending
-import bmo_rest
 import pending_store
 import render_report
 import scope_profiles
@@ -227,194 +232,6 @@ class TestPendingStore(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# bmo_rest
-# ---------------------------------------------------------------------------
-
-
-class TestBmoRestKeyDiscovery(unittest.TestCase):
-
-    def setUp(self):
-        self._tmp_home = tempfile.mkdtemp(prefix="triage-home-")
-        self._home_patcher = mock.patch.dict(os.environ, {"HOME": self._tmp_home})
-        self._home_patcher.start()
-        # Make sure env var doesn't leak from the host.
-        os.environ.pop("BMO_API_KEY", None)
-
-    def tearDown(self):
-        self._home_patcher.stop()
-        import shutil
-
-        shutil.rmtree(self._tmp_home, ignore_errors=True)
-
-    def test_env_var_wins(self):
-        with mock.patch.dict(os.environ, {"BMO_API_KEY": "env-key"}):
-            self.assertEqual(bmo_rest.get_api_key(), "env-key")
-
-    def test_file_fallback(self):
-        cfg_dir = os.path.join(self._tmp_home, ".config", "bmo")
-        os.makedirs(cfg_dir, exist_ok=True)
-        key_path = os.path.join(cfg_dir, "api_key")
-        with open(key_path, "w", encoding="utf-8") as f:
-            f.write("file-key\n")
-        os.chmod(key_path, 0o600)
-        self.assertEqual(bmo_rest.get_api_key(), "file-key")
-
-    def test_no_key_returns_none(self):
-        self.assertIsNone(bmo_rest.get_api_key())
-
-    def test_world_readable_warning(self):
-        cfg_dir = os.path.join(self._tmp_home, ".config", "bmo")
-        os.makedirs(cfg_dir, exist_ok=True)
-        key_path = os.path.join(cfg_dir, "api_key")
-        with open(key_path, "w", encoding="utf-8") as f:
-            f.write("loose-key\n")
-        os.chmod(key_path, 0o644)
-        buf = io.StringIO()
-        with mock.patch("sys.stderr", buf):
-            key = bmo_rest.get_api_key()
-        self.assertEqual(key, "loose-key")
-        self.assertIn("chmod 600", buf.getvalue())
-
-
-class TestBmoRestRedaction(unittest.TestCase):
-
-    def test_redact_masks_api_key(self):
-        out = bmo_rest._redact(
-            {
-                "X-BUGZILLA-API-KEY": "secret",
-                "Accept": "application/json",
-            }
-        )
-        self.assertEqual(out["X-BUGZILLA-API-KEY"], "***redacted***")
-        self.assertEqual(out["Accept"], "application/json")
-
-    def test_redact_case_insensitive(self):
-        out = bmo_rest._redact({"x-bugzilla-api-key": "secret"})
-        self.assertEqual(out["x-bugzilla-api-key"], "***redacted***")
-
-    def test_bmoerror_repr_does_not_leak(self):
-        e = bmo_rest.BMOError("boom", status_code=500, body={"x": 1})
-        self.assertIn("status=500", repr(e))
-        self.assertNotIn("secret", repr(e))
-
-
-class TestBmoRestUrlBuilding(unittest.TestCase):
-
-    def test_build_url_relative(self):
-        url = bmo_rest._build_url("/bug/1")
-        self.assertEqual(url, "https://bugzilla.mozilla.org/rest/bug/1")
-
-    def test_build_url_with_params(self):
-        url = bmo_rest._build_url("/bug", {"id": 1, "skip": None})
-        self.assertIn("id=1", url)
-        self.assertNotIn("skip", url)
-
-
-class TestBmoRestWriteGate(unittest.TestCase):
-    """Write helpers must never reach the network without a key."""
-
-    def test_post_comment_without_key_raises_before_request(self):
-        with mock.patch.object(bmo_rest, "_request") as m:
-            with self.assertRaises(bmo_rest.BMOError):
-                bmo_rest.post_comment(1, "hi", api_key=None)
-            m.assert_not_called()
-
-    def test_set_fields_without_key_raises_before_request(self):
-        with mock.patch.object(bmo_rest, "_request") as m:
-            with self.assertRaises(bmo_rest.BMOError):
-                bmo_rest.set_fields(1, {"priority": "P2"}, api_key=None)
-            m.assert_not_called()
-
-    def test_set_needinfo_without_key_raises_before_request(self):
-        with mock.patch.object(bmo_rest, "_request") as m:
-            with self.assertRaises(bmo_rest.BMOError):
-                bmo_rest.set_needinfo(1, "a@b", api_key=None)
-            m.assert_not_called()
-
-    def test_set_fields_rejects_empty(self):
-        with self.assertRaises(ValueError):
-            bmo_rest.set_fields(1, {}, api_key="k")
-
-
-class TestBmoRestRequestShape(unittest.TestCase):
-
-    def _mock_response(self, payload, status=200):
-        class FakeResp:
-            def __init__(self, data, code):
-                self._data = data
-                self.status = code
-
-            def read(self):
-                return self._data
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-        return FakeResp(json.dumps(payload).encode("utf-8"), status)
-
-    def test_get_bug_returns_first_bug(self):
-        fake = self._mock_response({"bugs": [{"id": 1, "summary": "x"}]})
-        with mock.patch("urllib.request.urlopen", return_value=fake) as m:
-            bug = bmo_rest.get_bug(1)
-        self.assertEqual(bug["id"], 1)
-        # Verify we issued GET and never set the Content-Type header
-        # (no body on GET).
-        req = m.call_args[0][0]
-        self.assertEqual(req.get_method(), "GET")
-
-    def test_get_bug_missing_raises(self):
-        fake = self._mock_response({"bugs": []})
-        with mock.patch("urllib.request.urlopen", return_value=fake):
-            with self.assertRaises(bmo_rest.BMOError) as ctx:
-                bmo_rest.get_bug(99999999)
-        self.assertEqual(ctx.exception.status_code, 404)
-
-    def test_post_comment_sends_body_and_key(self):
-        fake = self._mock_response({"id": 12345})
-        with mock.patch("urllib.request.urlopen", return_value=fake) as m:
-            bmo_rest.post_comment(1, "hello", api_key="K")
-        req = m.call_args[0][0]
-        self.assertEqual(req.get_method(), "POST")
-        body = json.loads(req.data.decode("utf-8"))
-        self.assertEqual(body["comment"], "hello")
-        self.assertFalse(body["is_private"])
-        # Header lookup is case-insensitive in urllib Request internals
-        # but the public dict uses the original casing; check via items.
-        headers = {k.lower(): v for k, v in req.header_items()}
-        self.assertEqual(headers["x-bugzilla-api-key"], "K")
-
-    def test_set_needinfo_sends_flag_shape(self):
-        fake = self._mock_response({"bugs": []})
-        with mock.patch("urllib.request.urlopen", return_value=fake) as m:
-            bmo_rest.set_needinfo(1, "user@example.com", api_key="K")
-        req = m.call_args[0][0]
-        self.assertEqual(req.get_method(), "PUT")
-        body = json.loads(req.data.decode("utf-8"))
-        self.assertEqual(body["flags"][0]["name"], "needinfo")
-        self.assertEqual(body["flags"][0]["status"], "?")
-        self.assertEqual(body["flags"][0]["requestee"], "user@example.com")
-
-    def test_http_error_parses_retry_after(self):
-        import urllib.error
-
-        err = urllib.error.HTTPError(
-            url="https://x",
-            code=429,
-            msg="Too Many",
-            hdrs={"Retry-After": "12"},
-            fp=io.BytesIO(b'{"error": true, "message": "slow down"}'),
-        )
-        with mock.patch("urllib.request.urlopen", side_effect=err):
-            with self.assertRaises(bmo_rest.BMOError) as ctx:
-                bmo_rest.get_bug(1)
-        self.assertEqual(ctx.exception.status_code, 429)
-        self.assertEqual(ctx.exception.retry_after, 12.0)
-
-
-# ---------------------------------------------------------------------------
 # apply_pending
 # ---------------------------------------------------------------------------
 
@@ -454,17 +271,39 @@ def _make_pending(bug_id=1, branch="1b", **extra):
     return payload
 
 
+def _make_api_responder(bug, write_response=None, fail_on=None):
+    """Build a side_effect for bmo_client.api that fakes a GET and writes.
+
+    ``bug`` is the dict returned for the ``GET bug/{id}`` call.
+    ``write_response`` is what every successful write call returns ({}).
+    ``fail_on`` is a callable (method, path) -> bool; matching writes raise
+    SystemExit(1), simulating bmo_client's HTTP-error path.
+    """
+    write_response = write_response if write_response is not None else {}
+
+    def responder(method, path, data=None):
+        if method == "GET" and path.startswith("bug/"):
+            return {"bugs": [bug]}
+        if fail_on is not None and fail_on(method, path):
+            raise SystemExit(1)
+        return write_response
+
+    return responder
+
+
 class _ApplyTestCase(unittest.TestCase):
     """Shared scaffolding for apply_pending tests."""
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp(prefix="triage-apply-")
         triage_paths.set_override(self._tmp)
-        self._env_patcher = mock.patch.dict(os.environ, {"BMO_API_KEY": "test-key"})
-        self._env_patcher.start()
+        # ensure_auth() always passes by default; individual tests can
+        # override with side_effect=SystemExit to simulate a missing key.
+        self._auth_patcher = mock.patch.object(bmo_client, "ensure_auth")
+        self._auth_patcher.start()
 
     def tearDown(self):
-        self._env_patcher.stop()
+        self._auth_patcher.stop()
         triage_paths.clear_override()
         import shutil
 
@@ -474,15 +313,17 @@ class _ApplyTestCase(unittest.TestCase):
 class TestApplyPendingExitCodes(_ApplyTestCase):
 
     def test_missing_pending_file_exits_2(self):
-        with mock.patch.object(bmo_rest, "get_bug") as fetch:
+        with mock.patch.object(bmo_client, "api") as api:
             code = apply_pending.run(9999, dry_run=True, assume_yes=True)
         self.assertEqual(code, 2)
-        fetch.assert_not_called()
+        api.assert_not_called()
 
     def test_stale_draft_exits_6(self):
         pending_store.save_pending(_make_pending(bug_id=1))
         bug = _make_bug(bug_id=1, last_change_time="2026-05-14T10:00:00Z")
-        with mock.patch.object(bmo_rest, "get_bug", return_value=bug):
+        with mock.patch.object(
+            bmo_client, "api", side_effect=_make_api_responder(bug)
+        ):
             code = apply_pending.run(1, dry_run=True, assume_yes=True)
         self.assertEqual(code, 6)
         # Pending file preserved.
@@ -490,45 +331,54 @@ class TestApplyPendingExitCodes(_ApplyTestCase):
 
     def test_missing_api_key_exits_3(self):
         pending_store.save_pending(_make_pending(bug_id=2))
-        bug = _make_bug(bug_id=2, last_change_time="2026-05-14T09:00:00Z")
-        with mock.patch.dict(os.environ, {"BMO_API_KEY": ""}, clear=False):
-            os.environ.pop("BMO_API_KEY", None)
-            with mock.patch.object(bmo_rest, "get_api_key", return_value=None):
-                with mock.patch.object(bmo_rest, "get_bug", return_value=bug):
-                    code = apply_pending.run(2, dry_run=False, assume_yes=True)
-        self.assertEqual(code, 3)
-        self.assertIsNotNone(pending_store.load_pending(2))
+        # Override the always-passing ensure_auth from setUp; bmo_client
+        # signals a missing key via sys.exit(1).
+        self._auth_patcher.stop()
+        try:
+            with mock.patch.object(
+                bmo_client, "ensure_auth", side_effect=SystemExit(1)
+            ), mock.patch.object(bmo_client, "api") as api:
+                code = apply_pending.run(2, dry_run=False, assume_yes=True)
+            self.assertEqual(code, 3)
+            self.assertIsNotNone(pending_store.load_pending(2))
+            # No HTTP work should have happened.
+            api.assert_not_called()
+        finally:
+            self._auth_patcher.start()
 
-    def test_dry_run_succeeds_without_calls(self):
+    def test_dry_run_succeeds_without_writes(self):
         pending_store.save_pending(_make_pending(bug_id=3))
         bug = _make_bug(bug_id=3, last_change_time="2026-05-14T09:00:00Z")
-        with mock.patch.object(
-            bmo_rest, "get_bug", return_value=bug
-        ), mock.patch.object(bmo_rest, "set_fields") as sf, mock.patch.object(
-            bmo_rest, "post_comment"
-        ) as pc, mock.patch.object(
-            bmo_rest, "set_needinfo"
-        ) as sn:
+        calls = []
+
+        def responder(method, path, data=None):
+            calls.append((method, path))
+            if method == "GET":
+                return {"bugs": [bug]}
+            return {}
+
+        with mock.patch.object(bmo_client, "api", side_effect=responder):
             code = apply_pending.run(3, dry_run=True, assume_yes=True)
         self.assertEqual(code, 0)
-        sf.assert_not_called()
-        pc.assert_not_called()
-        sn.assert_not_called()
+        # Only the GET fetch ran; no PUT/POST.
+        methods = [m for m, _ in calls]
+        self.assertEqual(methods, ["GET"])
         # Dry run does not delete the pending file.
         self.assertIsNotNone(pending_store.load_pending(3))
 
     def test_full_success_deletes_pending_and_logs(self):
-        pending_store.save_pending(_make_pending(bug_id=4))
+        pending = _make_pending(bug_id=4, ni_targets=["a@example.com"])
+        pending_store.save_pending(pending)
         bug = _make_bug(bug_id=4, last_change_time="2026-05-14T09:00:00Z")
-        with mock.patch.object(
-            bmo_rest, "get_bug", return_value=bug
-        ), mock.patch.object(
-            bmo_rest, "set_fields", return_value={}
-        ), mock.patch.object(
-            bmo_rest, "post_comment", return_value={}
-        ), mock.patch.object(
-            bmo_rest, "set_needinfo", return_value={}
-        ):
+        calls = []
+
+        def responder(method, path, data=None):
+            calls.append((method, path))
+            if method == "GET":
+                return {"bugs": [bug]}
+            return {}
+
+        with mock.patch.object(bmo_client, "api", side_effect=responder):
             code = apply_pending.run(4, dry_run=False, assume_yes=True)
         self.assertEqual(code, 0)
         self.assertIsNone(pending_store.load_pending(4))
@@ -537,20 +387,18 @@ class TestApplyPendingExitCodes(_ApplyTestCase):
         self.assertEqual(len(log), 1)
         self.assertEqual(log[0]["bug_id"], 4)
         self.assertEqual(log[0]["decision"], "triaged")
+        # Expected call sequence: GET, set_fields PUT, comment POST, needinfo PUT.
+        methods = [m for m, _ in calls]
+        self.assertEqual(methods, ["GET", "PUT", "POST", "PUT"])
 
     def test_partial_failure_preserves_pending(self):
         pending_store.save_pending(_make_pending(bug_id=5))
         bug = _make_bug(bug_id=5, last_change_time="2026-05-14T09:00:00Z")
-        err = bmo_rest.BMOError("boom", status_code=500)
-        with mock.patch.object(
-            bmo_rest, "get_bug", return_value=bug
-        ), mock.patch.object(
-            bmo_rest, "set_fields", return_value={}
-        ), mock.patch.object(
-            bmo_rest, "post_comment", side_effect=err
-        ), mock.patch.object(
-            bmo_rest, "set_needinfo"
-        ):
+        responder = _make_api_responder(
+            bug,
+            fail_on=lambda method, path: method == "POST" and "comment" in path,
+        )
+        with mock.patch.object(bmo_client, "api", side_effect=responder):
             code = apply_pending.run(5, dry_run=False, assume_yes=True)
         self.assertEqual(code, 4)
         # Pending preserved for retry; log entry records partial.
@@ -565,15 +413,20 @@ class TestApplyPendingExitCodes(_ApplyTestCase):
         bug = _make_bug(bug_id=6, last_change_time="2026-05-14T09:00:00Z")
         # Empty input on stdin means abort.
         stdin = io.StringIO("\n")
-        with mock.patch.object(
-            bmo_rest, "get_bug", return_value=bug
-        ), mock.patch.object(bmo_rest, "set_fields") as sf, mock.patch.object(
-            bmo_rest, "post_comment"
-        ) as pc:
+        calls = []
+
+        def responder(method, path, data=None):
+            calls.append((method, path))
+            if method == "GET":
+                return {"bugs": [bug]}
+            return {}
+
+        with mock.patch.object(bmo_client, "api", side_effect=responder):
             code = apply_pending.run(6, dry_run=False, assume_yes=False, stdin=stdin)
         self.assertEqual(code, 5)
-        sf.assert_not_called()
-        pc.assert_not_called()
+        # Only the GET fetch ran; no writes after abort.
+        methods = [m for m, _ in calls]
+        self.assertEqual(methods, ["GET"])
         # Pending preserved.
         self.assertIsNotNone(pending_store.load_pending(6))
 
@@ -776,12 +629,12 @@ class TestTriagePathsResolution(unittest.TestCase):
 
     def test_persist_preserves_other_fields(self):
         with open(self._cfg, "w", encoding="utf-8") as f:
-            f.write('api_key = "shh"\n')
+            f.write('unrelated_field = "keep-me"\n')
             f.write('default_scope = "media"\n')
         triage_paths.persist_output_dir("/root")
         with open(self._cfg, "r", encoding="utf-8") as f:
             text = f.read()
-        self.assertIn('api_key = "shh"', text)
+        self.assertIn('unrelated_field = "keep-me"', text)
         self.assertIn('default_scope = "media"', text)
         self.assertIn('output_dir = "/root"', text)
 

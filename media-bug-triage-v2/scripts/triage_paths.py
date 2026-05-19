@@ -136,10 +136,6 @@ def read_default_scope_from_config():
     return _read_toml_field(CONFIG_PATH, "default_scope")
 
 
-def read_api_key_from_config():
-    return _read_toml_field(CONFIG_PATH, "api_key")
-
-
 def persist_output_dir(value):
     """Write output_dir to the TOML config. Returns the resolved path."""
     abs_path = os.path.abspath(os.path.expanduser(value))

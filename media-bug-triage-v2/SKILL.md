@@ -80,20 +80,41 @@ Helper scripts (this skill ships these in `scripts/`; invoke with
   TOML reader/writer. Also a CLI (`--get-output-dir`,
   `--set-output-dir PATH`, `--get-default-scope`, `--config-path`)
   used by the prompt-and-persist flow.
-- `bmo_rest.py` — stdlib REST wrapper. Library only.
 - `pending_store.py` — JSON I/O for the per-bug pending draft, bug
   snapshot, and the audit log. Library only.
 - `scope_profiles.py` — profile table and `infer_profile()`.
 - `apply_pending.py` — CLI; the user types `apply {id}` to run it.
-  Accepts `--output-dir PATH` to override the configured root.
+  Accepts `--output-dir PATH` to override the configured root. All BMO
+  REST work goes through `../../shared/bmo_client.py`.
 - `render_report.py` — CLI; renders the report to
   `{OUTPUT_ROOT}/bug-{ID}/triage.md`. Accepts `--output-dir PATH`.
 
-**API key.** REST writes need a BMO API key. The skill auto-discovers
-it in this order: `api_key` in `~/.config/firefox-triage/config.toml`,
-then `$BMO_API_KEY`, then `~/.config/bmo/api_key` (single line,
-`chmod 600`). Reads of public bugs work without a key. Never print or
-log the key; the wrapper redacts it from every error path.
+**Shared modules used:**
+
+- `../../shared/bmo_client.py` — centralised BMO REST + API-key
+  handling. The skill imports it via a `sys.path` shim. Public surface
+  used: `ensure_auth()` and `api(method, path, data)`.
+- `../../shared/bmo-check-auth` — CLI probe for "do I have a key?"
+  without revealing the value.
+- `../../shared/Bugzilla.md` — team REST conventions, severity ratings,
+  and prompt-injection warnings. Read this before drafting your own
+  REST calls.
+
+**API key — HARD RULES.** The Bugzilla API key gives full BMO write
+access under the user's identity. It must **never** enter the Claude
+session.
+
+- **Do not Read, cat, or otherwise load** the contents of
+  `~/.config/bugzilla/config.toml`, `~/.config/bmo-to-md/config.toml`,
+  any `~/.config/bmo*` file, or any other path the user identifies as
+  containing credentials.
+- **Do not echo** `$BMO_API_KEY` or any string that looks like a 40-hex
+  key.
+- Authentication probing goes through `../../shared/bmo-check-auth`
+  (silent on success, prints "OK: ..." on failure with no value).
+- All REST work goes through `bmo_client.api(...)`; the key stays in
+  that subprocess and never returns to the caller. `apply_pending.py`
+  follows this contract.
 
 ---
 
@@ -174,9 +195,13 @@ State the resolved root in the Step 4 inventory output, on the
 
 ### TOML config — `~/.config/firefox-triage/config.toml`
 
+This file controls **output behaviour only**. It must not contain an
+`api_key` — credentials live in
+`~/.config/bugzilla/config.toml` (read by `bmo_client.py`, never by
+this skill).
+
 ```toml
 output_dir    = "/home/cm/triage"
-api_key       = "…"                 # optional
 default_scope = "media"             # optional — falls back here when
                                     #   inference doesn't match and
                                     #   the user didn't pass scope:
@@ -238,7 +263,7 @@ etc.), proceed.
 1. **Fetch via MCP:** `mcp__moz__get_bugzilla_bug` — full bug with
    comments, attachments, history, flags, see-also, dependencies,
    regressed_by. If history is missing, supplement with a REST call
-   (`bmo_rest.get_bug_history`).
+   through `bmo_client.api("GET", f"bug/{id}/history")`.
 2. **Display overview:**
    ```
    Analyzing Bug {BUG_ID}...
@@ -650,9 +675,10 @@ python3 {SKILL_DIR}/scripts/apply_pending.py {id}
    fresh `last_change_time` against the snapshot's; otherwise it
    falls back to comparing against the draft's `created_at`. Exit 6
    (stale) and leave the pending file in place if stale.
-3. Resolve API key (`api_key` in TOML → `$BMO_API_KEY` →
-   `~/.config/bmo/api_key`) → exit 3 if missing, with a remediation
-   message.
+3. Call `bmo_client.ensure_auth()` to verify a key exists (the key
+   stays inside the `bmo_client` subprocess). Exit 3 if missing, with
+   a remediation message pointing the user at
+   `~/.config/bugzilla/config.toml` or `$BMO_API_KEY`.
 4. Show a one-screen diff of the intended POSTs / PUTs and prompt
    `[y/N]`. `--yes` skips the prompt. Empty → exit 5.
 5. Execute in this order, each wrapped in `try / except BMOError`:

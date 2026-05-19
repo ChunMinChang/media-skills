@@ -50,9 +50,11 @@ the call exits with a clear error rather than guessing a location.
 
 ### TOML config — `~/.config/firefox-triage/config.toml`
 
+This file controls **output behaviour only**. Do not store an `api_key`
+here — see the API-key section below.
+
 ```toml
 output_dir    = "/home/cm/triage"
-api_key       = "…"                 # optional
 default_scope = "media"             # optional — fallback when neither
                                     #   inference nor scope: matches
 ```
@@ -60,51 +62,64 @@ default_scope = "media"             # optional — fallback when neither
 The TOML reader is a minimal stdlib parser that understands top-level
 scalars only (no sections, no arrays).
 
-## API key (REST writes only)
+## Security: API-key handling
 
-Reads of public bugs work anonymously. To `apply` a draft you need a
-BMO API key. Resolution order:
+The Bugzilla API key gives full BMO write access under the user's
+identity. The skill must **never** load it into the Claude session.
 
-1. `api_key` in `~/.config/firefox-triage/config.toml`.
-2. `$BMO_API_KEY` environment variable.
-3. `~/.config/bmo/api_key` — single line, `chmod 600` recommended
-   (warning emitted if world-readable).
+- **All REST work routes through `../../shared/bmo_client.py`.** The
+  key is read inside that module's subprocess, used as an HTTP header,
+  and never returned. `apply_pending.py` calls `bmo_client.ensure_auth()`
+  to fail-fast on a missing key and `bmo_client.api()` for each
+  request; neither returns a key.
+- **Authentication probing** goes through
+  `../../shared/bmo-check-auth` — silent on success, prints
+  remediation on failure, never echoes the value.
+- **The skill does not Read or cat** `~/.config/bugzilla/config.toml`,
+  `~/.config/bmo-to-md/config.toml`, any `~/.config/bmo*` file, or any
+  other path the user identifies as credentialled. SKILL.md restates
+  this as a hard rule for Claude.
+
+Key resolution order (handled inside `bmo_client.py`):
+
+1. `$BMO_API_KEY` environment variable.
+2. `api_key` in `~/.config/bugzilla/config.toml`.
+3. `api_key` in `~/.config/bmo-to-md/config.toml`.
 
 Generate a key at <https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey>.
-The wrapper redacts the key from every log line and exception path;
-`apply_pending.py --dry-run` lets you preview the calls without
-issuing them.
+Reads of public bugs work anonymously, but `apply` requires writes and
+will exit 3 if no key is found.
 
 ## scripts/
 
 | File | Role |
 |---|---|
-| `triage_paths.py` | Library + CLI — output-root resolution, per-bug path helpers, TOML reader/writer. CLI is used by the prompt-and-persist flow (`--get-output-dir`, `--set-output-dir PATH`, `--get-default-scope`, `--config-path`). |
-| `bmo_rest.py` | Library — stdlib REST wrapper, key redaction, write-gate. |
+| `triage_paths.py` | Library + CLI — output-root resolution, per-bug path helpers, TOML reader/writer. CLI used by the prompt-and-persist flow (`--get-output-dir`, `--set-output-dir PATH`, `--get-default-scope`, `--config-path`). Does **not** read or write `api_key`. |
 | `pending_store.py` | Library — atomic JSON I/O for pending drafts, bug snapshots, and the audit log. |
 | `scope_profiles.py` | Library — five profile tables + `infer_profile()`. |
-| `apply_pending.py` | CLI — invoked on `apply {id}`. Accepts `--output-dir PATH`. Exit codes 0/1/2/3/4/5/6. |
+| `apply_pending.py` | CLI — invoked on `apply {id}`. Imports `../../shared/bmo_client.py` for all BMO REST. Accepts `--output-dir PATH`. Exit codes 0/1/2/3/4/5/6. |
 | `render_report.py` | CLI — renders `{root}/bug-{id}/triage.md`. Accepts `--output-dir PATH`. |
-| `test_triage_scripts.py` | stdlib unittest, 74 tests. |
+| `test_triage_scripts.py` | stdlib unittest, 54 tests. |
 
 ### Tests
 
 ```sh
-cd mozilla/firefox/dot.claude/skills/triage/scripts
+cd media-bug-triage-v2/scripts
 python3 -m unittest test_triage_scripts
 ```
 
-All tests are stdlib-only; no network is touched (urllib is mocked).
+All tests are stdlib-only; no network is touched (`bmo_client.api` is
+mocked).
 
 ### Dry-run an apply
 
 ```sh
-python3 mozilla/firefox/dot.claude/skills/triage/scripts/apply_pending.py \
-    1234567 --dry-run
+python3 media-bug-triage-v2/scripts/apply_pending.py 1234567 --dry-run
 ```
 
 Prints the planned `PUT /bug/{id}` and `POST /bug/{id}/comment` calls,
-issues none.
+issues none. Still requires an API key (the dry run fetches the bug
+through `bmo_client` for the stale check).
 
 ## Required external tools
 
