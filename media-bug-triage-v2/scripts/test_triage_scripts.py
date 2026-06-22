@@ -19,10 +19,30 @@ from unittest import mock
 # Import the modules under test. Skill scripts are siblings; the shared
 # bmo_client lives under ../../shared/ in the media-skills repo layout.
 sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(
-    0,
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "shared"),
-)
+
+
+def _add_shared_to_path():
+    """Put the media-skills shared/ dir on sys.path.
+
+    realpath resolves this script's true location, so it works whether the
+    skill runs from the source repo, is installed as a symlink, or is
+    materialized (the script file is itself a symlink back to source). Walking
+    upward finds the sibling shared/ holding bmo_client.py regardless of how
+    deep the script sits, and is robust to lexical path normalization.
+    """
+    d = os.path.dirname(os.path.realpath(__file__))
+    while True:
+        cand = os.path.join(d, "shared")
+        if os.path.isfile(os.path.join(cand, "bmo_client.py")):
+            sys.path.insert(0, cand)
+            return
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
+_add_shared_to_path()
 import bmo_client
 import apply_pending
 import pending_store
