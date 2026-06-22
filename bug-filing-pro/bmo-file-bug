@@ -81,7 +81,7 @@ _add_shared_to_path()
 try:
     from bmo_client import (
         BMO, BMOError,
-        check_auth, ensure_auth, api, format_flags,
+        check_auth, ensure_auth, has_auth, api, format_flags,
     )
 except ImportError as e:
     print(f"error: cannot locate shared/bmo_client.py near this script: {e}",
@@ -356,8 +356,12 @@ def render_html_preview(title, banner, rows, description, flags, attachments):
     _open(path, is_file=True)
 
 
-def open_form_preview(bug):
-    """Open the prefilled enter_bug.cgi form (body only) for native review."""
+def _enter_bug_url(bug):
+    """Build a prefilled enter_bug.cgi URL (body fields only).
+
+    enter_bug.cgi cannot carry attachments (browsers forbid pre-filling a file
+    input from a URL) or flags, so only body fields are included.
+    """
     fields = [
         ("product", bug["product"]),
         ("component", bug["component"]),
@@ -379,13 +383,47 @@ def open_form_preview(bug):
         fields.append(("see_also", s))
     if bug.get("keywords"):
         fields.append(("keywords", ",".join(bug["keywords"])))
-    url = (BMO + "/enter_bug.cgi?"
-           + urllib.parse.urlencode(fields, quote_via=urllib.parse.quote))
+    return (BMO + "/enter_bug.cgi?"
+            + urllib.parse.urlencode(fields, quote_via=urllib.parse.quote))
+
+
+def _skipped_for_form(bug, attachments):
+    """List what enter_bug.cgi cannot carry (attachments, flags), for warnings."""
+    skipped = []
+    if attachments:
+        skipped.append("attachments: "
+                       + ", ".join(a["file_name"] for a in attachments))
+    if bug.get("flags"):
+        skipped.append("flags: " + ", ".join(
+            f["name"] + f["status"]
+            + (f" -> {f['requestee']}" if f.get("requestee") else "")
+            for f in bug["flags"]))
+    return skipped
+
+
+def open_form_preview(bug):
+    """Preview only: open the prefilled form but warn against submitting it
+    (the API does the real filing once the user confirms)."""
     print("NOTE: browser form preview is BODY ONLY -- it cannot show "
           "attachments or the full flag set.")
     print("      Do NOT click Submit on this form: it would create a "
           "DUPLICATE bug. The API does the real filing once you confirm.")
-    _open(url)
+    _open(_enter_bug_url(bug))
+
+
+def file_via_browser(bug, attachments):
+    """No-key fallback: open the prefilled form for the user to submit under
+    their own account. The form cannot carry attachments or flags, so list
+    those so the user can add them manually afterward."""
+    print("No API key -- opening the prefilled bug form in your browser.")
+    print("Review it and click Submit to file the bug under your own account.")
+    skipped = _skipped_for_form(bug, attachments)
+    if skipped:
+        print("NOTE: the form cannot include these -- add them after filing "
+              "(or set an API key to automate):")
+        for s in skipped:
+            print("  " + s)
+    _open(_enter_bug_url(bug))
 
 
 # --- subcommands -----------------------------------------------------------
@@ -502,7 +540,19 @@ def cmd_create(args):
             open_form_preview(bug)
         return
 
-    ensure_auth()
+    if args.browser_file:
+        file_via_browser(bug, attachments)
+        return
+    if not has_auth():
+        print("error: no Bugzilla API key found.", file=sys.stderr)
+        print("Filing attachments and flags needs the BMO REST API (a key).",
+              file=sys.stderr)
+        print("Set up a key (see README; verify with --check-auth), or re-run "
+              "with --browser-file to", file=sys.stderr)
+        print("open the prefilled form and file the body yourself "
+              "(attachments/flags then added manually).", file=sys.stderr)
+        sys.exit(1)
+
     try:
         result = _api_write("POST", "bug", bug)
     except BMOError as e:
@@ -678,6 +728,10 @@ def build_parser():
                     help="any other field, incl. cf_* tracking flags (repeatable)")
     add_attachment_opts(pc)
     add_common_opts(pc, ["html", "form", "none"])
+    pc.add_argument("--browser-file", dest="browser_file", action="store_true",
+                    help="no API key needed: open the prefilled enter_bug.cgi "
+                         "form for you to submit yourself (body only -- "
+                         "attachments/flags are NOT included)")
     pc.set_defaults(func=cmd_create)
 
     pa = sub.add_parser("attach", help="upload attachments to an existing bug")

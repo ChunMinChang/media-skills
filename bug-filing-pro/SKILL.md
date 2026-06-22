@@ -45,6 +45,21 @@ python3 .claude/skills/bug-filing-pro/bmo-file-bug --check-auth
 
 ## Workflow (filing a new bug)
 
+### Step 0 — Verify the API key (do this first)
+Run `python3 .claude/skills/bug-filing-pro/bmo-file-bug --check-auth`. If it
+reports a key, continue normally. **If no key is found, don't dead-end** — use
+`AskUserQuestion` to offer two paths:
+- **Set up an API key** — point the user to [`README.md`](./README.md) for the
+  one-time setup, then re-check. This unlocks attachments + flags via the API.
+- **File it in the browser myself (no key)** — proceed through Steps 1–3 to draft
+  the body, then in Step 6 run `create … --browser-file` (no `--dry-run`). That
+  opens the prefilled `enter_bug.cgi` form for the user to submit under their own
+  account. The form **cannot** carry attachments or flags, so tell the user those
+  must be added manually afterward (or set a key to automate). Skip the
+  attachment/flag gathering in Step 4 accordingly.
+
+Catching this up front means the user never reaches a final-step "no key" error.
+
 ### Step 1 — Determine product and component
 If the change touches a file in the tree, run
 `./mach file-info bugzilla-component <file>` on a representative file. Output is
@@ -65,6 +80,8 @@ sensible component. Otherwise ask the user.
   newlines and markdown survive shell quoting).
 
 ### Step 4 — Gather attachments and flags
+(Skip this in browser-file mode — `enter_bug.cgi` can't carry attachments or
+flags, and they require an API key.)
 - Simple files: one `--attach <path>` each (type and `is_patch` auto-detected).
 - For per-attachment summaries/flags/privacy, write an `--attachments-json` file
   (schema below).
@@ -72,10 +89,18 @@ sensible component. Otherwise ask the user.
   `--flag 'needinfo:?:dev@mozilla.com'`).
 - Tracking flags are *fields*, not flags: `--field cf_status_firefox142=affected`.
 
-### Step 5 — Dry-run and preview (REQUIRED)
+### Step 5 — Dry-run and preview (REQUIRED for API filing)
 Run with `--dry-run`. Default `--preview html` opens a local page rendering the
 full request (fields, flags, attachments table); use `--preview form` to show
 the body in BMO's native enter-bug form (body only — do not submit it).
+
+> **Two browser modes, don't confuse them:** `--preview form` is review-only —
+> **do not** submit it (the API does the real filing on confirmation, so
+> submitting would create a duplicate). `--browser-file` (Step 0 no-key path) is
+> the opposite — there you **do** submit the form yourself and the API is never
+> used.
+
+(In browser-file mode there's nothing to dry-run; go straight to Step 6.)
 
 ```
 python3 .claude/skills/bug-filing-pro/bmo-file-bug create \
@@ -99,7 +124,16 @@ If an attachment fails after the bug is created, the script reports which
 succeeded and prints the precise `bmo-file-bug attach <id> …` retry command —
 relay it; the bug itself is already filed.
 
+**No-key path (from Step 0):** run the same `create` command with `--browser-file`
+(and no `--dry-run`). It opens the prefilled form in the browser for the user to
+submit themselves and prints which attachments/flags it couldn't include. Nothing
+is filed by the script — tell the user to click Submit, then add those
+attachments/flags manually on the new bug.
+
 ## Other operations
+
+> `attach` and `flags` always require an API key (no browser fallback —
+> `enter_bug.cgi` can't upload files or set flags).
 
 **Attach to an existing bug:**
 ```

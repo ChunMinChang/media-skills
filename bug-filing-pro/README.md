@@ -30,6 +30,30 @@ preview, or `--preview form` to view the body in BMO's native enter-bug form.
 Run `bmo-file-bug create --help` for the full option list. See
 [`SKILL.md`](./SKILL.md) for the end-to-end workflow.
 
+### No API key? Body-only fallback
+
+A Bugzilla API key is required to file **attachments and flags** (the whole point
+of this skill). But filing a bug's **body** doesn't need one — anyone logged into
+bugzilla.mozilla.org can submit a prefilled form themselves. So `create` accepts
+`--browser-file`:
+
+```
+bmo-file-bug create --product P --component C --summary S --description-file F \
+    --browser-file
+```
+
+This opens the prefilled `enter_bug.cgi` form in your browser for you to review
+and **Submit** under your own account — no key, no API call. It cannot carry
+attachments or flags; if you pass any, it lists them so you can add them manually
+after filing (or set a key to automate). `attach` and `flags` have no browser
+fallback — they always require a key.
+
+| Goal | API key? | How |
+|---|---|---|
+| File body only, submit it yourself | No | `create … --browser-file` |
+| File body **+ attachments + flags** | Yes | `create …` (REST API) |
+| Attach to / set flags on a bug | Yes | `attach` / `flags` |
+
 ### Dependencies
 
 - **Python 3.8+** (standard library only — no extra packages).
@@ -40,8 +64,10 @@ Run `bmo-file-bug create --help` for the full option list. See
 
 ### Bugzilla API key setup
 
-A Bugzilla API key is required for every write (create, attach, flag). Generate
-one at <https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey>, then pick **one**
+A Bugzilla API key is required for any API write — creating with attachments or
+flags, and all `attach`/`flags` operations. (Body-only filing can skip the key
+via `--browser-file`, above.) Generate one at
+<https://bugzilla.mozilla.org/userprefs.cgi?tab=apikey>, then pick **one**
 storage option. The script checks these sources in order — this is the **same
 config used by the `sec-approval` and `uplift-request` skills**, so if those
 work, this does too:

@@ -116,6 +116,18 @@ def ensure_auth():
     _require_api_key()
 
 
+def has_auth():
+    """Return True iff an API key is available.
+
+    A non-exiting, non-printing presence check that complements check_auth()
+    (prints + exits) and ensure_auth() (exits on miss), for callers that need
+    to branch on key availability. Never returns or prints the key value, so
+    it preserves the no-key-exposure contract.
+    """
+    key, _ = _resolve_api_key()
+    return key is not None
+
+
 class BMOError(Exception):
     """A BMO REST request failed.
 
