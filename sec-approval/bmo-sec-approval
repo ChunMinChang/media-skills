@@ -21,8 +21,28 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "shared"))
+def _add_shared_to_path():
+    """Put the media-skills shared/ dir on sys.path.
+
+    realpath resolves this script's true location, so it works whether the
+    skill runs from the source repo, is installed as a symlink, or is
+    materialized (the script file is itself a symlink back to source). Walking
+    upward finds the sibling shared/ holding bmo_client.py regardless of how
+    deep the script sits, and is robust to lexical path normalization.
+    """
+    d = os.path.dirname(os.path.realpath(__file__))
+    while True:
+        cand = os.path.join(d, "shared")
+        if os.path.isfile(os.path.join(cand, "bmo_client.py")):
+            sys.path.insert(0, cand)
+            return
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
+_add_shared_to_path()
 try:
     from bmo_client import (
         BMO, PHAB,
@@ -31,8 +51,8 @@ try:
         get_attachments, find_single_phab_attachment,
     )
 except ImportError as e:
-    print(f"error: cannot import bmo_client from sibling shared/ directory: "
-          f"{e}", file=sys.stderr)
+    print(f"error: cannot locate shared/bmo_client.py near this script: {e}",
+          file=sys.stderr)
     print("hint: install the full media-skills bundle, not just this skill",
           file=sys.stderr)
     sys.exit(2)
