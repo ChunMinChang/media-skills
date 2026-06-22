@@ -1,0 +1,723 @@
+#!/usr/bin/env python3
+"""File and edit Bugzilla bugs directly via the BMO REST API.
+
+A full-featured companion to the form-based ``bug-filing`` skill: it creates a
+bug, uploads one or more attachments (each with its own flags), and sets
+bug-/attachment-level flags -- the things the prefilled enter_bug.cgi form
+cannot do.
+
+Subcommands:
+    create   Create a bug, optionally with attachments + flags.
+    attach   Upload one or more attachments to an existing bug.
+    flags    Set/clear flags (and custom fields) on a bug or attachment.
+    list     List a bug's active attachments and their flags.
+
+Usage:
+    bmo-file-bug create --product P --component C --summary S
+        --description-file body.md [--type defect] [--severity S2]
+        [--priority P2] [--version unspecified] [--op-sys OS] [--platform P]
+        [--keywords a,b] [--blocks N]... [--depends-on N]... [--see-also URL]...
+        [--cc a@m.c,b@m.c] [--assigned-to u] [--group g]...
+        [--flag 'name:status[:requestee]']... [--field cf_x=value]...
+        [--attach PATH]... [--attachments-json FILE]
+        [--dry-run] [--preview html|form|none]
+
+    bmo-file-bug attach <bug-id> [--attach PATH]... [--attachments-json FILE]
+        [--dry-run] [--preview html|none]
+
+    bmo-file-bug flags <bug-id> [--flag 'name:status[:requestee]']...
+        [--field cf_x=value]...
+        [--attachment <attId> --attachment-flag 'name:status[:requestee]']...
+        [--dry-run] [--preview html|none]
+
+    bmo-file-bug list <bug-id>
+    bmo-file-bug --check-auth
+
+A bug is never created or modified without --dry-run being run first by the
+skill workflow; --dry-run previews the exact payload (attachment data elided)
+and, with --preview, opens a browser preview. The API key is resolved inside
+shared/bmo_client.py and never enters this process's output.
+
+API key resolution (first match wins):
+    1. $BMO_API_KEY environment variable
+    2. api_key in ~/.config/bugzilla/config.toml
+    3. api_key in ~/.config/bmo-to-md/config.toml
+"""
+
+import argparse
+import base64
+import html
+import json
+import mimetypes
+import os
+import shlex
+import sys
+import tempfile
+import urllib.parse
+import webbrowser
+
+def _add_shared_to_path():
+    """Put the media-skills shared/ dir on sys.path.
+
+    realpath resolves this script's true location, so it works whether the
+    skill runs from the source repo, is installed as a symlink, or is
+    materialized (the script file is itself a symlink back to source). Walking
+    upward finds the sibling shared/ holding bmo_client.py regardless of how
+    deep the script sits, and is robust to lexical path normalization.
+    """
+    d = os.path.dirname(os.path.realpath(__file__))
+    while True:
+        cand = os.path.join(d, "shared")
+        if os.path.isfile(os.path.join(cand, "bmo_client.py")):
+            sys.path.insert(0, cand)
+            return
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
+_add_shared_to_path()
+try:
+    from bmo_client import (
+        BMO, BMOError,
+        check_auth, ensure_auth, api, format_flags,
+    )
+except ImportError as e:
+    print(f"error: cannot locate shared/bmo_client.py near this script: {e}",
+          file=sys.stderr)
+    print("hint: install the full media-skills bundle, not just this skill",
+          file=sys.stderr)
+    sys.exit(2)
+
+
+# Extensions we treat as text/plain when mimetypes can't guess (logs, configs).
+TEXT_EXTS = {
+    ".log", ".md", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".conf",
+    ".diff", ".patch", ".txt",
+}
+FLAG_STATUSES = ("?", "+", "-", "X")
+
+
+def die(msg):
+    print(f"error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+# --- parsing helpers -------------------------------------------------------
+
+def parse_flag(spec):
+    """Parse 'name:status[:requestee]' into a BMO flag object.
+
+    Colon-separated rather than the 'name+'/'name?' mash because flag names
+    contain hyphens (approval-mozilla-beta, sec-approval) which collide with
+    the '-' status; ':' never appears in a name, status, or requestee email.
+    """
+    parts = spec.split(":")
+    if len(parts) < 2 or len(parts) > 3:
+        die(f"bad --flag {spec!r}; expected name:status[:requestee]")
+    name, status = parts[0].strip(), parts[1].strip()
+    if not name:
+        die(f"bad --flag {spec!r}; empty flag name")
+    if status not in FLAG_STATUSES:
+        die(f"bad flag status {status!r} in {spec!r}; use one of ? + - X")
+    flag = {"name": name, "status": status}
+    if len(parts) == 3 and parts[2].strip():
+        flag["requestee"] = parts[2].strip()
+    return flag
+
+
+def parse_field(spec):
+    """Parse 'key=value' into (key, value)."""
+    key, sep, val = spec.partition("=")
+    if not sep:
+        die(f"bad --field {spec!r}; expected key=value")
+    return key.strip(), val
+
+
+def flatten_csv(values, as_int=False):
+    """Flatten a list of (possibly comma-separated) option values."""
+    out = []
+    for v in values or []:
+        for part in v.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if as_int:
+                try:
+                    out.append(int(part))
+                except ValueError:
+                    die(f"expected an integer bug number, got {part!r}")
+            else:
+                out.append(part)
+    return out
+
+
+def guess_content_type(path, is_patch):
+    if is_patch:
+        return "text/plain"
+    ctype, _ = mimetypes.guess_type(path)
+    if ctype:
+        return ctype
+    if os.path.splitext(path)[1].lower() in TEXT_EXTS:
+        return "text/plain"
+    return "application/octet-stream"
+
+
+def _read_file_bytes(path):
+    if not os.path.isfile(path):
+        raise BMOError(None, f"attachment file not found: {path}")
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def build_simple_attachment(path):
+    """Build an attachment object from a path, auto-detecting everything."""
+    raw = _read_file_bytes(path)
+    name = os.path.basename(path)
+    is_patch = name.lower().endswith((".diff", ".patch"))
+    return {
+        "file_name": name,
+        "summary": name,
+        "is_patch": is_patch,
+        "content_type": guess_content_type(path, is_patch),
+        "data": base64.b64encode(raw).decode("ascii"),
+        "_path": path,
+        "_size": len(raw),
+    }
+
+
+def build_json_attachment(entry):
+    """Build an attachment object from an --attachments-json entry (full control)."""
+    if not isinstance(entry, dict):
+        raise BMOError(None, f"attachments-json entries must be objects: {entry!r}")
+    path = entry.get("path")
+    if not path:
+        raise BMOError(None, f"attachments-json entry missing 'path': {entry}")
+    raw = _read_file_bytes(path)
+    name = entry.get("file_name") or os.path.basename(path)
+    is_patch = entry.get("is_patch")
+    if is_patch is None:
+        is_patch = name.lower().endswith((".diff", ".patch"))
+    att = {
+        "file_name": name,
+        "summary": entry.get("summary") or name,
+        "is_patch": bool(is_patch),
+        "content_type": entry.get("content_type")
+        or guess_content_type(path, is_patch),
+        "data": base64.b64encode(raw).decode("ascii"),
+        "_path": path,
+        "_size": len(raw),
+    }
+    if entry.get("is_private"):
+        att["is_private"] = True
+    if entry.get("comment"):
+        att["comment"] = entry["comment"]
+    if entry.get("flags"):
+        att["flags"] = entry["flags"]
+    return att
+
+
+def load_attachments(attach_paths, attachments_json):
+    """Combine --attach paths and an --attachments-json file into one list.
+
+    Simple --attach entries come first (in order), then JSON entries. Raises
+    BMOError on a missing file or malformed JSON so the caller can report it.
+    """
+    atts = [build_simple_attachment(p) for p in (attach_paths or [])]
+    if attachments_json:
+        if not os.path.isfile(attachments_json):
+            raise BMOError(None, f"--attachments-json file not found: "
+                                 f"{attachments_json}")
+        try:
+            with open(attachments_json, encoding="utf-8") as f:
+                entries = json.load(f)
+        except (OSError, ValueError) as e:
+            raise BMOError(None, f"cannot read --attachments-json: {e}")
+        if not isinstance(entries, list):
+            raise BMOError(None, "--attachments-json must contain a JSON array")
+        atts.extend(build_json_attachment(e) for e in entries)
+    return atts
+
+
+def clean_attachment(att):
+    """Strip preview-only keys (_path, _size) before POSTing."""
+    return {k: v for k, v in att.items() if not k.startswith("_")}
+
+
+def elided_attachment(att):
+    """A printable copy with the base64 blob replaced by a size note."""
+    a = clean_attachment(att)
+    a["data"] = f"<{att['_size']} bytes base64 of {os.path.basename(att['_path'])!r}>"
+    return a
+
+
+def _api_write(method, path, data):
+    """A write that raises on failure, including BMO's 200-with-error case."""
+    result = api(method, path, data, on_error="raise")
+    if isinstance(result, dict) and result.get("error"):
+        raise BMOError(result.get("code"),
+                       f"{method} /rest/{path}: {result.get('message')}")
+    return result
+
+
+# --- browser preview -------------------------------------------------------
+
+def _open(url_or_path, is_file=False):
+    """Print then open in the browser; survive headless environments."""
+    target = ("file://" + url_or_path) if is_file else url_or_path
+    print(f"preview: {target}")
+    try:
+        webbrowser.open(target)
+    except Exception as e:  # no browser / no DISPLAY -- the path is printed above
+        print(f"(could not auto-open a browser: {e})", file=sys.stderr)
+
+
+def _html_rows(pairs):
+    out = []
+    for label, value in pairs:
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, (list, tuple)):
+            value = ", ".join(str(v) for v in value)
+        out.append(f"<tr><th>{html.escape(str(label))}</th>"
+                   f"<td>{html.escape(str(value))}</td></tr>")
+    return "\n".join(out)
+
+
+def _html_flags(flags):
+    if not flags:
+        return ""
+    items = []
+    for f in flags:
+        s = f"{html.escape(f.get('name', '?'))}{html.escape(f.get('status', ''))}"
+        if f.get("requestee"):
+            s += f" → {html.escape(f['requestee'])}"
+        items.append(f"<li><code>{s}</code></li>")
+    return "<h2>Flags</h2><ul>" + "".join(items) + "</ul>"
+
+
+def _html_attachments(attachments):
+    if not attachments:
+        return ""
+    rows = []
+    for a in attachments:
+        flags = format_flags(a) if a.get("flags") else ""
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(a['file_name'])}</td>"
+            f"<td>{a['_size']:,} B</td>"
+            f"<td>{html.escape(a['content_type'])}</td>"
+            f"<td>{'patch' if a.get('is_patch') else ''}</td>"
+            f"<td>{'private' if a.get('is_private') else ''}</td>"
+            f"<td>{html.escape(flags)}</td>"
+            "</tr>"
+        )
+    return (
+        "<h2>Attachments</h2><table>"
+        "<tr><th>file</th><th>size</th><th>type</th><th>patch</th>"
+        "<th>private</th><th>flags</th></tr>"
+        + "".join(rows) + "</table>"
+    )
+
+
+def render_html_preview(title, banner, rows, description, flags, attachments):
+    desc_block = ""
+    if description:
+        desc_block = (
+            "<h2>Description</h2>"
+            "<p class=note>Shown as plain text; BMO renders a subset of "
+            "markdown server-side.</p>"
+            f"<pre>{html.escape(description)}</pre>"
+        )
+    body = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>{html.escape(title)}</title>
+<style>
+ body {{ font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 2rem; max-width: 60rem; }}
+ .banner {{ background: #fff3cd; border: 1px solid #ffe69c; padding: .75rem 1rem; border-radius: 6px; }}
+ table {{ border-collapse: collapse; margin: .5rem 0 1.5rem; width: 100%; }}
+ th, td {{ border: 1px solid #ddd; padding: .35rem .6rem; text-align: left; vertical-align: top; }}
+ th {{ background: #f6f8fa; white-space: nowrap; }}
+ pre {{ background: #f6f8fa; border: 1px solid #ddd; border-radius: 6px; padding: 1rem; white-space: pre-wrap; }}
+ code {{ background: #f0f0f0; padding: 0 .25rem; border-radius: 3px; }}
+ .note {{ color: #666; font-size: 12px; margin: .25rem 0; }}
+ h1 {{ font-size: 1.4rem; }} h2 {{ font-size: 1.1rem; margin-top: 1.5rem; }}
+</style></head><body>
+<h1>{html.escape(title)}</h1>
+<p class="banner">{html.escape(banner)}</p>
+<table>{_html_rows(rows)}</table>
+{_html_flags(flags)}
+{_html_attachments(attachments)}
+{desc_block}
+</body></html>"""
+    fd, path = tempfile.mkstemp(prefix="bmo-file-bug-", suffix=".html")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(body)
+    _open(path, is_file=True)
+
+
+def open_form_preview(bug):
+    """Open the prefilled enter_bug.cgi form (body only) for native review."""
+    fields = [
+        ("product", bug["product"]),
+        ("component", bug["component"]),
+        ("short_desc", bug["summary"]),
+    ]
+    if bug.get("description"):
+        fields.append(("comment", bug["description"]))
+    for src, dst in (("type", "bug_type"), ("version", "version"),
+                     ("severity", "bug_severity"), ("priority", "priority"),
+                     ("op_sys", "op_sys"), ("platform", "rep_platform"),
+                     ("assigned_to", "assigned_to")):
+        if bug.get(src):
+            fields.append((dst, bug[src]))
+    for b in bug.get("blocks", []):
+        fields.append(("blocked", str(b)))
+    for d in bug.get("depends_on", []):
+        fields.append(("dependson", str(d)))
+    for s in bug.get("see_also", []):
+        fields.append(("see_also", s))
+    if bug.get("keywords"):
+        fields.append(("keywords", ",".join(bug["keywords"])))
+    url = (BMO + "/enter_bug.cgi?"
+           + urllib.parse.urlencode(fields, quote_via=urllib.parse.quote))
+    print("NOTE: browser form preview is BODY ONLY -- it cannot show "
+          "attachments or the full flag set.")
+    print("      Do NOT click Submit on this form: it would create a "
+          "DUPLICATE bug. The API does the real filing once you confirm.")
+    _open(url)
+
+
+# --- subcommands -----------------------------------------------------------
+
+def read_description(args):
+    if args.description_file and args.description:
+        die("pass only one of --description or --description-file")
+    if args.description_file:
+        if not os.path.isfile(args.description_file):
+            die(f"--description-file not found: {args.description_file}")
+        with open(args.description_file, encoding="utf-8") as f:
+            return f.read()
+    if args.description:
+        return args.description
+    die("a description is required: pass --description or --description-file")
+
+
+def build_bug_payload(args):
+    bug = {
+        "product": args.product,
+        "component": args.component,
+        "summary": args.summary,
+        "version": args.version,
+        "type": args.type,
+        "description": read_description(args),
+    }
+    for src, key in (("severity", "severity"), ("priority", "priority"),
+                     ("op_sys", "op_sys"), ("platform", "platform"),
+                     ("assigned_to", "assigned_to")):
+        val = getattr(args, src)
+        if val:
+            bug[key] = val
+    keywords = flatten_csv(args.keywords)
+    if keywords:
+        bug["keywords"] = keywords
+    cc = flatten_csv(args.cc)
+    if cc:
+        bug["cc"] = cc
+    groups = flatten_csv(args.group)
+    if groups:
+        bug["groups"] = groups
+    see_also = flatten_csv(args.see_also)
+    if see_also:
+        bug["see_also"] = see_also
+    blocks = flatten_csv(args.blocks, as_int=True)
+    if blocks:
+        bug["blocks"] = blocks
+    depends_on = flatten_csv(args.depends_on, as_int=True)
+    if depends_on:
+        bug["depends_on"] = depends_on
+    if args.flag:
+        bug["flags"] = [parse_flag(f) for f in args.flag]
+    for spec in args.field or []:
+        key, val = parse_field(spec)
+        bug[key] = val
+    return bug
+
+
+def _upload_attachments(bug_id, attachments):
+    """POST each attachment to bug_id. Returns (ok_names, failures)."""
+    ok, failed = [], []
+    for att in attachments:
+        body = clean_attachment(att)
+        body["ids"] = [bug_id]
+        try:
+            _api_write("POST", f"bug/{bug_id}/attachment", body)
+            ok.append(att["file_name"])
+            print(f"  attached: {att['file_name']}")
+        except BMOError as e:
+            failed.append((att, e))
+            print(f"  FAILED to attach {att['file_name']}: {e}",
+                  file=sys.stderr)
+    return ok, failed
+
+
+def _report_attachment_failures(bug_id, failed):
+    """Print a recovery hint listing the exact retry command."""
+    if not failed:
+        return
+    paths = " ".join(f"--attach {shlex.quote(a['_path'])}" for a, _ in failed)
+    print(f"\n{len(failed)} attachment(s) failed. Bug {bug_id} already exists; "
+          f"retry just the failures with:", file=sys.stderr)
+    print(f"  bmo-file-bug attach {bug_id} {paths}", file=sys.stderr)
+
+
+def cmd_create(args):
+    bug = build_bug_payload(args)
+    try:
+        attachments = load_attachments(args.attach, args.attachments_json)
+    except BMOError as e:
+        die(str(e))
+
+    if args.dry_run:
+        print("DRY RUN -- no bug will be created.\n")
+        print("POST /rest/bug")
+        print(json.dumps(bug, indent=2))
+        for att in attachments:
+            print(f"\nPOST /rest/bug/<new-id>/attachment")
+            print(json.dumps(elided_attachment(att), indent=2))
+        if args.preview == "html":
+            rows = [
+                ("Product :: Component", f"{bug['product']} :: {bug['component']}"),
+                ("Type", bug.get("type")), ("Severity", bug.get("severity")),
+                ("Priority", bug.get("priority")), ("Version", bug.get("version")),
+                ("Summary", bug.get("summary")), ("Keywords", bug.get("keywords")),
+                ("Blocks", bug.get("blocks")), ("Depends on", bug.get("depends_on")),
+                ("CC", bug.get("cc")), ("See also", bug.get("see_also")),
+                ("Groups", bug.get("groups")), ("Assigned to", bug.get("assigned_to")),
+            ]
+            render_html_preview(
+                "New bug preview", "Nothing has been filed yet.", rows,
+                bug.get("description"), bug.get("flags"), attachments)
+        elif args.preview == "form":
+            open_form_preview(bug)
+        return
+
+    ensure_auth()
+    try:
+        result = _api_write("POST", "bug", bug)
+    except BMOError as e:
+        die(f"failed to create bug: {e}")
+    bug_id = result.get("id")
+    print(f"Created bug {bug_id}: {BMO}/show_bug.cgi?id={bug_id}")
+
+    ok, failed = _upload_attachments(bug_id, attachments)
+    _report_attachment_failures(bug_id, failed)
+    if failed:
+        sys.exit(1)
+
+
+def cmd_attach(args):
+    try:
+        attachments = load_attachments(args.attach, args.attachments_json)
+    except BMOError as e:
+        die(str(e))
+    if not attachments:
+        die("nothing to attach: pass --attach or --attachments-json")
+
+    if args.dry_run:
+        print(f"DRY RUN -- no attachments will be uploaded to bug "
+              f"{args.bug_id}.\n")
+        for att in attachments:
+            print(f"POST /rest/bug/{args.bug_id}/attachment")
+            print(json.dumps(elided_attachment(att), indent=2))
+            print()
+        if args.preview == "html":
+            rows = [("Target bug", f"{BMO}/show_bug.cgi?id={args.bug_id}")]
+            render_html_preview(
+                f"Attachments for bug {args.bug_id}",
+                "Nothing has been uploaded yet.", rows, None, None, attachments)
+        return
+
+    ensure_auth()
+    ok, failed = _upload_attachments(args.bug_id, attachments)
+    _report_attachment_failures(args.bug_id, failed)
+    if failed:
+        sys.exit(1)
+
+
+def cmd_flags(args):
+    bug_flags = [parse_flag(f) for f in (args.flag or [])]
+    att_flags = [parse_flag(f) for f in (args.attachment_flag or [])]
+    fields = dict(parse_field(s) for s in (args.field or []))
+    if args.attachment_flag and not args.attachment:
+        die("--attachment-flag requires --attachment <id>")
+    if args.attachment is not None and not str(args.attachment).isdigit():
+        die(f"--attachment must be a numeric id, got {args.attachment!r}")
+    if not bug_flags and not att_flags and not fields:
+        die("nothing to do: pass --flag, --field, or --attachment-flag")
+
+    bug_body = {}
+    if bug_flags:
+        bug_body["flags"] = bug_flags
+    bug_body.update(fields)
+    att_body = {"ids": [int(args.attachment)], "flags": att_flags} \
+        if att_flags else None
+
+    if args.dry_run:
+        print("DRY RUN -- no flags will be changed.\n")
+        if bug_body:
+            print(f"PUT /rest/bug/{args.bug_id}")
+            print(json.dumps(bug_body, indent=2))
+        if att_body:
+            print(f"\nPUT /rest/bug/attachment/{args.attachment}")
+            print(json.dumps(att_body, indent=2))
+        if args.preview == "html":
+            rows = [("Target bug", f"{BMO}/show_bug.cgi?id={args.bug_id}")]
+            if args.attachment:
+                rows.append(("Target attachment", args.attachment))
+            for k, v in fields.items():
+                rows.append((k, v))
+            render_html_preview(
+                f"Flag changes for bug {args.bug_id}",
+                "Nothing has been changed yet.", rows, None,
+                bug_flags + att_flags, None)
+        return
+
+    ensure_auth()
+    if bug_body:
+        try:
+            _api_write("PUT", f"bug/{args.bug_id}", bug_body)
+            print(f"Updated bug {args.bug_id}: {BMO}/show_bug.cgi?id={args.bug_id}")
+        except BMOError as e:
+            die(f"failed to update bug {args.bug_id}: {e}")
+    if att_body:
+        try:
+            _api_write("PUT", f"bug/attachment/{args.attachment}", att_body)
+            print(f"Updated attachment {args.attachment}")
+        except BMOError as e:
+            die(f"failed to update attachment {args.attachment}: {e}")
+
+
+def cmd_list(args):
+    # Fetch ALL active attachments (not just patches) so screenshots, HTML
+    # testcases, etc. show up. include_fields skips the multi-MB base64 data.
+    fields = "id,summary,flags,content_type,is_obsolete,file_name,is_patch"
+    result = api("GET", f"bug/{args.bug_id}/attachment?include_fields={fields}")
+    atts = [a for a in result.get("bugs", {}).get(str(args.bug_id), [])
+            if not a.get("is_obsolete")]
+    if not atts:
+        print(f"No active attachments on bug {args.bug_id}")
+        return
+    print(f"Active attachments on bug {args.bug_id}:\n")
+    for a in atts:
+        flags = format_flags(a)
+        kind = " [patch]" if a.get("is_patch") else ""
+        fn = a.get("file_name", "")
+        suffix = f"  ({fn})" if fn and fn != a.get("summary") else ""
+        print(f"  Attachment {a['id']}  {a.get('content_type', '')}{kind}")
+        print(f"    {a.get('summary', '')}{suffix}")
+        if flags:
+            print(f"    Flags: {flags}")
+        print()
+
+
+# --- argument parsing ------------------------------------------------------
+
+def add_attachment_opts(p):
+    p.add_argument("--attach", action="append", metavar="PATH",
+                   help="file to attach (repeatable; auto-detects type/patch)")
+    p.add_argument("--attachments-json", metavar="FILE",
+                   help="JSON array of attachment objects for full control "
+                        "(path, summary, content_type, is_patch, is_private, "
+                        "comment, flags)")
+
+
+def add_common_opts(p, preview_choices):
+    p.add_argument("--dry-run", action="store_true",
+                   help="preview the payload without writing anything")
+    p.add_argument("--preview", choices=preview_choices, default="html",
+                   help="browser preview during --dry-run (default: html)")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--check-auth", action="store_true",
+                        help="report whether an API key is available "
+                             "(never prints the key)")
+    sub = parser.add_subparsers(dest="command")
+
+    pc = sub.add_parser("create", help="create a bug")
+    pc.add_argument("--product", required=True)
+    pc.add_argument("--component", required=True)
+    pc.add_argument("--summary", required=True)
+    pc.add_argument("--description")
+    pc.add_argument("--description-file")
+    pc.add_argument("--type", default="defect",
+                    help="defect | enhancement | task (default: defect)")
+    pc.add_argument("--version", default="unspecified",
+                    help="product version (default: unspecified)")
+    pc.add_argument("--severity")
+    pc.add_argument("--priority")
+    pc.add_argument("--op-sys", dest="op_sys")
+    pc.add_argument("--platform")
+    pc.add_argument("--assigned-to", dest="assigned_to")
+    pc.add_argument("--keywords", action="append",
+                    help="comma-separated or repeatable")
+    pc.add_argument("--cc", action="append", help="comma-separated or repeatable")
+    pc.add_argument("--group", action="append",
+                    help="security/visibility group (repeatable)")
+    pc.add_argument("--see-also", dest="see_also", action="append")
+    pc.add_argument("--blocks", action="append", help="bug number (repeatable)")
+    pc.add_argument("--depends-on", dest="depends_on", action="append",
+                    help="bug number (repeatable)")
+    pc.add_argument("--flag", action="append", metavar="name:status[:requestee]",
+                    help="bug-level flag (repeatable)")
+    pc.add_argument("--field", action="append", metavar="key=value",
+                    help="any other field, incl. cf_* tracking flags (repeatable)")
+    add_attachment_opts(pc)
+    add_common_opts(pc, ["html", "form", "none"])
+    pc.set_defaults(func=cmd_create)
+
+    pa = sub.add_parser("attach", help="upload attachments to an existing bug")
+    pa.add_argument("bug_id")
+    add_attachment_opts(pa)
+    add_common_opts(pa, ["html", "none"])
+    pa.set_defaults(func=cmd_attach)
+
+    pf = sub.add_parser("flags", help="set flags/fields on a bug or attachment")
+    pf.add_argument("bug_id")
+    pf.add_argument("--flag", action="append", metavar="name:status[:requestee]",
+                    help="bug-level flag (repeatable)")
+    pf.add_argument("--field", action="append", metavar="key=value",
+                    help="bug field, incl. cf_* tracking flags (repeatable)")
+    pf.add_argument("--attachment", metavar="ID",
+                    help="target attachment id for --attachment-flag")
+    pf.add_argument("--attachment-flag", dest="attachment_flag", action="append",
+                    metavar="name:status[:requestee]",
+                    help="attachment-level flag (repeatable; needs --attachment)")
+    add_common_opts(pf, ["html", "none"])
+    pf.set_defaults(func=cmd_flags)
+
+    pl = sub.add_parser("list", help="list a bug's attachments and flags")
+    pl.add_argument("bug_id")
+    pl.set_defaults(func=cmd_list)
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.check_auth:
+        check_auth()
+        return
+    if not getattr(args, "command", None):
+        parser.print_help()
+        sys.exit(2)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

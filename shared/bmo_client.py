@@ -116,12 +116,32 @@ def ensure_auth():
     _require_api_key()
 
 
-def api(method, path, data=None):
+class BMOError(Exception):
+    """A BMO REST request failed.
+
+    Carries the HTTP status code (``None`` for a transport-level error) and a
+    message built only from method/path/code/response-body -- never request
+    headers, so the API key can never leak through it (see Security model).
+    """
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def api(method, path, data=None, on_error="exit"):
     """Issue an authenticated request to /rest/<path>. Returns parsed JSON.
 
-    The API key is resolved internally; callers never see it. Prints the
-    response body and exits 1 on HTTP errors (response body only -- never
-    request headers, which is where the key lives).
+    The API key is resolved internally; callers never see it.
+
+    on_error controls failure handling (both modes report the response body
+    only -- never request headers, which is where the key lives):
+        "exit"  (default) -- print the error and sys.exit(1). Preserves the
+                original single-shot behavior used by the sec-approval and
+                uplift-request skills.
+        "raise" -- raise BMOError instead, so a caller running a multi-step
+                flow (e.g. create bug, then upload N attachments) can recover
+                from a partial failure rather than dying mid-sequence.
     """
     url = f"{BMO}/rest/{path}"
     body = json.dumps(data).encode() if data else None
@@ -136,10 +156,14 @@ def api(method, path, data=None):
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         err_body = e.read().decode(errors="replace")
-        print(f"error: {method} /rest/{path} -> HTTP {e.code}\n{err_body}",
-              file=sys.stderr)
+        msg = f"{method} /rest/{path} -> HTTP {e.code}\n{err_body}"
+        if on_error == "raise":
+            raise BMOError(e.code, msg)
+        print(f"error: {msg}", file=sys.stderr)
         sys.exit(1)
     except urllib.error.URLError as e:
+        if on_error == "raise":
+            raise BMOError(None, str(e.reason))
         print(f"error: {e.reason}", file=sys.stderr)
         sys.exit(1)
 
