@@ -22,12 +22,16 @@ allowed-tools:
 > [`README.md`](./README.md). Point the user there if `bmo-to-md` or
 > `bmo-sec-approval --check-auth` fails.
 
-> **Scope:** `sec-approval` is now required **only** for a vulnerability in the
+> **Scope:** `sec-approval` is required **only** for a vulnerability in the
 > **parent process that is triggerable from a content process** — typically a
-> bug keyworded `sec-high` + `csectype-sandbox-escape`. Everything else lands
-> under normal review. Most media bugs fall outside the gate: the code runs in
-> the content, RDD, GMP, or Utility process. Phase 1 still applies to every
-> security bug; Phase 2 Step 1 decides whether the questionnaire is needed.
+> bug keyworded `sec-high` + `csectype-sandbox-escape`. A recent parent-process
+> regression that has shipped only in Nightly is exempt when its regressing
+> check-in is known and Beta and ESR are marked `unaffected`. All other
+> security fixes can land without explicit sec-approval once their normal
+> review and testing requirements are met. Most media bugs fall outside the
+> gate because the affected code runs in the content, RDD, GMP, or Utility
+> process. Phase 1 still applies to every security bug; Phase 2 Step 1 decides
+> whether the questionnaire is needed.
 
 This skill has two phases:
 
@@ -278,17 +282,23 @@ user gives explicit approval to continue.
 
 ### Step 1: Is sec-approval Required at All?
 
-The gate is now narrow: **sec-approval is only required for a vulnerability in
-the parent process that is triggerable from a content process** — typically a
-bug keyworded `sec-high` **and** `csectype-sandbox-escape`. Previously all
-sec-high bugs needed approval; that is now inverted.
+The gate is narrow: **sec-approval is only required for a vulnerability in the
+parent process that is triggerable from a content process** — typically a bug
+keyworded `sec-high` **and** `csectype-sandbox-escape`. Previously all sec-high
+bugs needed approval; that rule is now inverted.
+
+Decide from the actual affected and triggering processes, not from severity or
+an IPC actor's name alone. `sec-high` by itself does not require approval, and
+`csectype-sandbox-escape` is supporting evidence rather than a substitute for
+checking the process boundary.
 
 **No sec-approval needed** if any of these hold:
 
 1. Rating is **sec-low**, **sec-moderate**, **sec-other**, or **sec-want**
-2. Rating is **sec-high** but the flaw only affects the **content process**
-3. Rating is **sec-high** but the flaw only affects some other **non-parent**
-   process (GPU, RDD, GMP, Utility, Socket, …)
+2. The flaw only affects the **content process**, regardless of a `sec-high`
+   rating
+3. The flaw only affects some other **non-parent** process (GPU, RDD, GMP,
+   Utility, Socket, …), regardless of a `sec-high` rating
 4. It is a cross-process bug whose **target** process is not the parent — the
    correct keyword for that case is `csectype-priv-escalation`, **not**
    `csectype-sandbox-escape`. Fix the keyword if you see it used wrongly.
@@ -311,7 +321,7 @@ usually *not* the parent process:
   parent process — `RDDParent` and `RemoteDecoderManagerParent` run in the RDD
   process. Check where the actor is actually constructed.
 - The case that *does* need approval: the parent process mishandling data or a
-  message that a content (or other sandboxed) process controls.
+  message that a content process controls.
 
 If the bug is unrated, rate it following the
 [Client Severity Guidelines](https://wiki.mozilla.org/Security_Severity_Ratings/Client)
@@ -319,9 +329,10 @@ rather than defaulting to worst-case.
 
 State the determination to the user with the reason, e.g. "No sec-approval
 required: sec-high, but the flaw is in the RDD process
-(`csectype-priv-escalation`), not the parent process." Then ask whether they
-still want the questionnaire drafted — it is a useful record, and cheap
-insurance if the process determination is arguable.
+(`csectype-priv-escalation`), not the parent process." If sec-approval is not
+required, stop after reporting the Phase 1 audit and this determination. Do not
+draft the questionnaire or offer to set the flag unless the user explicitly
+asks for a draft anyway.
 
 If the answer is genuinely unclear — an ambiguous process boundary, or an
 unrated bug that might reach the parent — the docs are explicit: request
@@ -627,8 +638,9 @@ post if any Step 1 exemption applies:
 - **Recent unshipped Nightly-only regression** with ESR and Beta marked
   `unaffected`: the patch can land directly.
 
-For these cases, inform the user the questionnaire file is available for their
-records but does not need to be posted. Skip the rest of this step.
+For these cases, inform the user that no sec-approval request needs to be
+posted. If the user explicitly requested a questionnaire draft anyway, note
+that it is only for their records. Skip the rest of this step.
 
 For **parent-process sandbox escapes** — and for genuinely ambiguous cases,
 where the guidance is to request approval rather than agonize over it — ask the
