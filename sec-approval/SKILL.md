@@ -1,6 +1,6 @@
 ---
 name: sec-approval
-description: Help prepare a Firefox security approval request by analyzing local commits/changes and drafting answers to the sec-approval questionnaire. Use when setting sec-approval? on a Bugzilla bug.
+description: Help prepare a Firefox security approval request by analyzing local commits/changes, deciding whether sec-approval is required at all (only parent-process vulnerabilities triggerable from a content process), and drafting answers to the sec-approval questionnaire. Use when setting sec-approval? on a Bugzilla bug.
 argument-hint: "[bug-id] [path-to-bug-report]"
 allowed-tools:
   - Bash(git:*)
@@ -22,13 +22,21 @@ allowed-tools:
 > [`README.md`](./README.md). Point the user there if `bmo-to-md` or
 > `bmo-sec-approval --check-auth` fails.
 
+> **Scope:** `sec-approval` is now required **only** for a vulnerability in the
+> **parent process that is triggerable from a content process** — typically a
+> bug keyworded `sec-high` + `csectype-sandbox-escape`. Everything else lands
+> under normal review. Most media bugs fall outside the gate: the code runs in
+> the content, RDD, GMP, or Utility process. Phase 1 still applies to every
+> security bug; Phase 2 Step 1 decides whether the questionnaire is needed.
+
 This skill has two phases:
 
-1. **Compliance audit** — verify the patch strictly follows the
+1. **Compliance audit** — verify the patch follows the
    [Fixing Security Bugs](https://firefox-source-docs.mozilla.org/bug-mgmt/processes/fixing-security-bugs.html)
    guidelines. Violations are a hard gate: they **must** be resolved before
    proceeding.
-2. **Sec-approval questionnaire** — draft answers to the
+2. **Sec-approval questionnaire** — determine whether sec-approval is required
+   at all, and if so draft answers to the
    [Security Approval](https://firefox-source-docs.mozilla.org/bug-mgmt/processes/security-approval.html)
    questions.
 
@@ -180,18 +188,28 @@ Tests included in the patch **must not**:
 - Contain comments or assertions that describe the security nature of the fix
 - Include exploit-like test content that demonstrates the attack vector
 
-Additionally, verify the test-landing policy:
+**Test-landing policy.** Tests are no longer withheld by default. The current
+[Fixing Security Bugs](https://firefox-source-docs.mozilla.org/bug-mgmt/processes/fixing-security-bugs.html)
+guidance is that "the advent of AI tools has frequently made this precaution
+not worth the extra effort". Judge case by case:
 
-- **If the bug affects released branches**: tests should generally **not** be
-  landed with the fix. They should land in a follow-up at least 4 weeks after
-  the release containing the fix ships. Suggest creating a cloned "task" bug
-  (also security-sensitive) to track the deferred test landing, or setting the
-  `in-testsuite` flag to `?`.
-- **If the bug is a development-branch-only regression** (never shipped in a
-  release): tests may land immediately.
+- **Default**: land the tests with the fix, provided they are sanitized per the
+  rules above.
+- **Split the tests into a separate commit** only when the vulnerability is
+  *unusually* hard to deduce from the patch, or *unusually* hard to trigger —
+  i.e. when the test, not the diff, is what gives it away.
+- **If split and the bug shipped in a release**: the tests land at least 4
+  weeks after the release containing the fix goes live. Track it either by
+  cloning a security-sensitive "land tests for bug XXXXXXX" task bug (rated
+  `sec-other`), or by setting `in-testsuite` to `?` plus a whiteboard tag of
+  the form `[reminder-test YYYY-MM-DD]` — Bugbot needinfos the assignee on
+  that date; flip `in-testsuite` to `+` once the tests land.
+- **If the bug never shipped in a release** (development-branch-only
+  regression): tests can land immediately on all affected branches.
 
-**If tests fail**: suggest renaming, sanitizing test content, or splitting
-tests into a deferred follow-up.
+**If tests fail the sanitization rules**: suggest renaming or rewriting the
+test content. Deferring the tests is a judgment call, not an automatic
+requirement.
 
 ### Check 5: Try Server / CI
 
@@ -199,11 +217,12 @@ Check whether the user has pushed (or plans to push) to Try:
 
 - **Best practice**: do not push to Try at all; test locally instead.
 - **If a Try push is necessary**: remind the user to:
-  - Get informal sec-approval first
   - Remove bug numbers from all commits in the Try push
-  - Exclude vulnerability test cases entirely
+  - Never push the bug's own vulnerability testcase; ideally push no tests
   - Never disclose the vulnerability nature or triggering methods in the
     Try push commit message or mozconfig
+  - Fold the change in with unrelated work in the same area, so the push
+    doesn't read as a security fix
 
 Ask the user about their Try push status.
 
@@ -217,7 +236,11 @@ the identifiability of the security fix:
 - Does the diff look like a pure correctness or robustness improvement rather
   than a targeted security patch?
 
-This is advisory — report observations but do not block on it.
+This is advisory — report observations but do not block on it. The current
+process explicitly downgrades the value of obfuscation: AI tooling can analyze
+a fix, derive the root cause, and often build a proof of concept, so shipping
+the fix quickly is the primary protection. Obfuscation matters most for **Try
+pushes** (Check 5), where the patch is public before it lands.
 
 ### Compliance Verdict
 
@@ -237,7 +260,8 @@ Then present the checklist for the user to confirm:
 - [ ] Commit message is not security-revealing
 - [ ] No security-revealing inline comments in the patch
 - [ ] No security-revealing identifiers in the patch
-- [ ] Tests don't paint a bulls-eye (or are deferred to follow-up)
+- [ ] Tests are sanitized (split into a follow-up only if the test, not the
+      diff, is what reveals the flaw)
 - [ ] Not pushed to Try with bug number / security tests
 - [ ] Bug is filed as restricted/sec-* on Bugzilla
 
@@ -252,19 +276,56 @@ user gives explicit approval to continue.
 
 ## Phase 2: Security Approval Questionnaire
 
-### Step 1: Check for Automatic Approval Eligibility
+### Step 1: Is sec-approval Required at All?
 
-Before drafting the questionnaire, check if the patch qualifies for **automatic
-approval** (i.e., no explicit `sec-approval` needed):
+The gate is now narrow: **sec-approval is only required for a vulnerability in
+the parent process that is triggerable from a content process** — typically a
+bug keyworded `sec-high` **and** `csectype-sandbox-escape`. Previously all
+sec-high bugs needed approval; that is now inverted.
 
-1. Bug has severity **sec-low**, **sec-moderate**, or **sec-other/sec-want**
-2. OR the bug is a **recent unshipped regression** — a specific regressing
-   commit is identified, the developer has marked ESR and Beta status flags as
-   `unaffected`, and the vulnerability only shipped in Nightly builds
+**No sec-approval needed** if any of these hold:
 
-If either condition is met, inform the user they may be able to land without
-explicit approval. Ask if they still want to prepare the questionnaire (useful
-for sec-high/sec-critical, or when in doubt).
+1. Rating is **sec-low**, **sec-moderate**, **sec-other**, or **sec-want**
+2. Rating is **sec-high** but the flaw only affects the **content process**
+3. Rating is **sec-high** but the flaw only affects some other **non-parent**
+   process (GPU, RDD, GMP, Utility, Socket, …)
+4. It is a cross-process bug whose **target** process is not the parent — the
+   correct keyword for that case is `csectype-priv-escalation`, **not**
+   `csectype-sandbox-escape`. Fix the keyword if you see it used wrongly.
+5. It is a parent-process bug but a **recent unshipped regression** on
+   mozilla-central: a specific regressing check-in is identified, the ESR and
+   Beta status flags are marked `unaffected`, and the vulnerability only
+   shipped in Nightly builds
+
+**Work out which process the flaw actually runs in** — for media code this is
+usually *not* the parent process:
+
+- Decoding (`dom/media/platforms/`, `dom/media/ipc/`) runs in the **RDD** or
+  **Utility** process; EME/CDM code runs in the **GMP** process; the playback
+  pipeline mostly runs in the **content** process.
+- Parent-process media code does exist: `MediaManager` / device enumeration,
+  the `*ProcessHost` / `*ProcessParent` process-launch and IPC-bridging code,
+  permission and pref plumbing, and code under `toolkit/` or `browser/`.
+- **Careful with IPDL naming**: a `…Parent` actor is the parent *side of the
+  protocol*, which usually lives in the RDD/GPU/Utility process, not in the
+  parent process — `RDDParent` and `RemoteDecoderManagerParent` run in the RDD
+  process. Check where the actor is actually constructed.
+- The case that *does* need approval: the parent process mishandling data or a
+  message that a content (or other sandboxed) process controls.
+
+If the bug is unrated, rate it following the
+[Client Severity Guidelines](https://wiki.mozilla.org/Security_Severity_Ratings/Client)
+rather than defaulting to worst-case.
+
+State the determination to the user with the reason, e.g. "No sec-approval
+required: sec-high, but the flaw is in the RDD process
+(`csectype-priv-escalation`), not the parent process." Then ask whether they
+still want the questionnaire drafted — it is a useful record, and cheap
+insurance if the process determination is arguable.
+
+If the answer is genuinely unclear — an ambiguous process boundary, or an
+unrated bug that might reach the parent — the docs are explicit: request
+sec-approval anyway and move on. "Don't overthink it!"
 
 ### Step 2: Answer the Questionnaire
 
@@ -274,6 +335,10 @@ messages gathered in the Preliminary step.
 #### Q1: Patch Visibility
 
 **Question**: "How easily could an exploit be constructed based on the patch?"
+
+(The source docs phrase this as "How easily can the security issue be deduced
+from the patch?" — cover both senses: how visible the flaw is in the diff, and
+how much work remains to weaponize it.)
 
 Analyze:
 
@@ -314,7 +379,7 @@ Confirm that:
 
 - Commit messages are clean (verified in Check 1)
 - Code comments are clean (verified in Check 2)
-- Test files are clean or deferred (verified in Check 3)
+- Test files are sanitized, or split into a follow-up (verified in Check 4)
 
 Report the current state — ideally "No, the patch has been reviewed for
 information leaks."
@@ -550,20 +615,25 @@ Use the Write tool to create this file, then inform the user of the file path.
 
 ### Step 6: Post to Bugzilla (Optional)
 
-**This step only applies when sec-approval is required.** Do NOT offer to post
-if the bug qualifies for automatic approval (see Step 1):
+**This step only applies when sec-approval is required** — i.e. Step 1
+concluded the flaw is in the **parent process** and triggerable from a content
+process (typically `sec-high` + `csectype-sandbox-escape`). Do NOT offer to
+post if any Step 1 exemption applies:
 
-- **sec-low**, **sec-moderate**, **sec-other**, or **sec-want**: no sec-approval
-  needed — the patch can land directly.
+- **sec-low**, **sec-moderate**, **sec-other**, or **sec-want**: the patch can
+  land directly.
+- **sec-high but content-process-only**, or targeting a **non-parent** process
+  (GPU, RDD, GMP, Utility, Socket, …): the patch can land directly.
 - **Recent unshipped Nightly-only regression** with ESR and Beta marked
-  `unaffected`: no sec-approval needed.
+  `unaffected`: the patch can land directly.
 
 For these cases, inform the user the questionnaire file is available for their
 records but does not need to be posted. Skip the rest of this step.
 
-For **sec-high**, **sec-critical**, or **unrated** bugs (assume worst-case):
-ask the user whether they want to post the questionnaire directly to Bugzilla
-and request `sec-approval?` on the attachment.
+For **parent-process sandbox escapes** — and for genuinely ambiguous cases,
+where the guidance is to request approval rather than agonize over it — ask the
+user whether they want to post the questionnaire directly to Bugzilla and
+request `sec-approval?` on the attachment.
 
 If the user agrees:
 
@@ -658,12 +728,20 @@ If the user agrees:
 
 ## Tips
 
-- Security keywords in Firefox: `sec-critical`, `sec-high`, `sec-moderate`,
-  `sec-low`, `sec-other`, `sec-want`
-- The security team is primarily concerned about `sec-high` and `sec-critical`
-  bugs that land before a public release
+- Severity keywords: `sec-critical`, `sec-high`, `sec-moderate`, `sec-low`,
+  `sec-other`, `sec-want`. Process keywords: `csectype-sandbox-escape` (target
+  is the **parent** process) vs `csectype-priv-escalation` (cross-process, but
+  the target is **not** the parent).
+- The sec-approval gate now covers only parent-process vulnerabilities
+  triggerable from a content process; everything else lands under normal
+  review. Phase 1 hygiene still applies to every security bug.
+- `sec-audit` / `sec-want` are the right home for discussion of code patterns
+  or architectural limitations — keep that out of bugs filed by external
+  reporters, since AI is good at turning a described pattern into new bugs.
 - Backports to ESR require separate approval; mention this if ESR is affected
 - If the patch is on an uplift request (not main/nightly), that changes the
   urgency and review process
-- When in doubt, assume worst-case severity and request sec-approval
-- Contact the security team (needinfo) when uncertain about any guideline
+- If you can't tell which process the flaw lives in, or the bug is unrated and
+  might reach the parent, request sec-approval anyway — "Don't overthink it!"
+- Contact the security team (needinfo, or #security on Slack — current
+  sec-approvers are Dan Veditz and Tom Ritter) when uncertain
