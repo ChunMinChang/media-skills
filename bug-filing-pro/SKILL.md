@@ -88,6 +88,12 @@ flags, and they require an API key.)
 - Bug-level flags: `--flag 'name:status[:requestee]'` (e.g.
   `--flag 'needinfo:?:dev@mozilla.com'`).
 - Tracking flags are *fields*, not flags: `--field cf_status_firefox142=affected`.
+- Security/visibility groups: `--group` accepts either the internal group name
+  or its visible Bugzilla label. For example,
+  `--group 'Security-Sensitive Media Bug'` resolves to `media-core-security`
+  before preview and filing.
+- Status whiteboard: `--whiteboard '[text]'` sets it directly when creating the
+  bug.
 
 ### Step 5 — Dry-run and preview (REQUIRED for API filing)
 Run with `--dry-run`. Default `--preview html` opens a local page rendering the
@@ -144,7 +150,8 @@ python3 .claude/skills/bug-filing-pro/bmo-file-bug attach <bug-id> \
 **Set flags / fields on a bug or attachment:**
 ```
 python3 .claude/skills/bug-filing-pro/bmo-file-bug flags <bug-id> \
-    --flag 'needinfo:?:dev@mozilla.com' --field cf_status_firefox142=fixed \
+    --flag 'needinfo:?:dev@mozilla.com' --whiteboard '[triage note]' \
+    --field cf_status_firefox142=fixed \
     --attachment <attId> --attachment-flag 'review:+' --dry-run
 ```
 

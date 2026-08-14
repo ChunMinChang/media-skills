@@ -10,6 +10,8 @@ skill. It does the things the prefilled `enter_bug.cgi` form cannot:
 - **Set flags** at any level: bug flags (`needinfo?`), attachment flags
   (`review?`, `sec-approval?`, `approval-mozilla-*?`, `data-review?`), and
   tracking flags (`cf_status_firefox*`) as fields.
+- **Set the status whiteboard** directly with `--whiteboard` when creating or
+  updating a bug.
 - **Attach to** and **set flags on** existing bugs.
 
 Every write is gated behind a `--dry-run` preview plus explicit confirmation.
@@ -29,6 +31,15 @@ exact payload; add `--preview html` (default) for a local full-fidelity browser
 preview, or `--preview form` to view the body in BMO's native enter-bug form.
 Run `bmo-file-bug create --help` for the full option list. See
 [`SKILL.md`](./SKILL.md) for the end-to-end workflow.
+
+`create --group` accepts either Bugzilla's internal group name, such as
+`media-core-security`, or the visible UI label, such as
+`Security-Sensitive Media Bug`. Visible labels are resolved through Bugzilla's
+group metadata before the dry-run payload is displayed.
+
+`create --whiteboard TEXT` sets the bug's status whiteboard. The `flags`
+subcommand accepts the same option for an existing bug; pass an empty value to
+clear it.
 
 ### No API key? Body-only fallback
 

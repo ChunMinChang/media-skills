@@ -18,6 +18,7 @@ Usage:
         [--priority P2] [--version unspecified] [--op-sys OS] [--platform P]
         [--keywords a,b] [--blocks N]... [--depends-on N]... [--see-also URL]...
         [--cc a@m.c,b@m.c] [--assigned-to u] [--group g]...
+        [--whiteboard TEXT]
         [--flag 'name:status[:requestee]']... [--field cf_x=value]...
         [--attach PATH]... [--attachments-json FILE]
         [--dry-run] [--preview html|form|none]
@@ -26,6 +27,7 @@ Usage:
         [--dry-run] [--preview html|none]
 
     bmo-file-bug flags <bug-id> [--flag 'name:status[:requestee]']...
+        [--whiteboard TEXT]
         [--field cf_x=value]...
         [--attachment <attId> --attachment-flag 'name:status[:requestee]']...
         [--dry-run] [--preview html|none]
@@ -50,6 +52,7 @@ import html
 import json
 import mimetypes
 import os
+import re
 import shlex
 import sys
 import tempfile
@@ -97,6 +100,7 @@ TEXT_EXTS = {
     ".diff", ".patch", ".txt",
 }
 FLAG_STATUSES = ("?", "+", "-", "X")
+INTERNAL_GROUP_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 
 
 def die(msg):
@@ -151,6 +155,42 @@ def flatten_csv(values, as_int=False):
             else:
                 out.append(part)
     return out
+
+
+def resolve_group_names(groups, group_api=None):
+    """Resolve Bugzilla's visible group labels to internal group names."""
+    if not groups or all(INTERNAL_GROUP_NAME.fullmatch(g) for g in groups):
+        return groups
+    if group_api is None:
+        group_api = api
+    try:
+        result = group_api("GET", "group", on_error="raise")
+    except BMOError as e:
+        die(f"could not resolve Bugzilla group labels: {e}")
+
+    aliases = {}
+    for group in result.get("groups", []):
+        name = group.get("name", "").strip()
+        if not name:
+            continue
+        for label in (name, group.get("description", "")):
+            label = label.strip()
+            if label:
+                aliases.setdefault(label.casefold(), set()).add(name)
+
+    resolved = []
+    for requested in groups:
+        if INTERNAL_GROUP_NAME.fullmatch(requested):
+            resolved.append(requested)
+            continue
+        matches = aliases.get(requested.casefold(), set())
+        if not matches:
+            die(f"unknown or unavailable Bugzilla group label {requested!r}")
+        if len(matches) > 1:
+            names = ", ".join(sorted(matches))
+            die(f"ambiguous Bugzilla group label {requested!r}: {names}")
+        resolved.append(next(iter(matches)))
+    return resolved
 
 
 def guess_content_type(path, is_patch):
@@ -372,7 +412,8 @@ def _enter_bug_url(bug):
     for src, dst in (("type", "bug_type"), ("version", "version"),
                      ("severity", "bug_severity"), ("priority", "priority"),
                      ("op_sys", "op_sys"), ("platform", "rep_platform"),
-                     ("assigned_to", "assigned_to")):
+                     ("assigned_to", "assigned_to"),
+                     ("whiteboard", "status_whiteboard")):
         if bug.get(src):
             fields.append((dst, bug[src]))
     for b in bug.get("blocks", []):
@@ -398,6 +439,8 @@ def _skipped_for_form(bug, attachments):
             f["name"] + f["status"]
             + (f" -> {f['requestee']}" if f.get("requestee") else "")
             for f in bug["flags"]))
+    if bug.get("groups"):
+        skipped.append("groups: " + ", ".join(bug["groups"]))
     return skipped
 
 
@@ -478,7 +521,11 @@ def build_bug_payload(args):
         bug["flags"] = [parse_flag(f) for f in args.flag]
     for spec in args.field or []:
         key, val = parse_field(spec)
+        if key == "whiteboard" and args.whiteboard is not None:
+            die("pass only one of --whiteboard or --field whiteboard=...")
         bug[key] = val
+    if args.whiteboard is not None:
+        bug["whiteboard"] = args.whiteboard
     return bug
 
 
@@ -511,6 +558,8 @@ def _report_attachment_failures(bug_id, failed):
 
 def cmd_create(args):
     bug = build_bug_payload(args)
+    if bug.get("groups") and not args.browser_file:
+        bug["groups"] = resolve_group_names(bug["groups"])
     try:
         attachments = load_attachments(args.attach, args.attachments_json)
     except BMOError as e:
@@ -529,6 +578,7 @@ def cmd_create(args):
                 ("Type", bug.get("type")), ("Severity", bug.get("severity")),
                 ("Priority", bug.get("priority")), ("Version", bug.get("version")),
                 ("Summary", bug.get("summary")), ("Keywords", bug.get("keywords")),
+                ("Whiteboard", bug.get("whiteboard")),
                 ("Blocks", bug.get("blocks")), ("Depends on", bug.get("depends_on")),
                 ("CC", bug.get("cc")), ("See also", bug.get("see_also")),
                 ("Groups", bug.get("groups")), ("Assigned to", bug.get("assigned_to")),
@@ -599,12 +649,17 @@ def cmd_flags(args):
     bug_flags = [parse_flag(f) for f in (args.flag or [])]
     att_flags = [parse_flag(f) for f in (args.attachment_flag or [])]
     fields = dict(parse_field(s) for s in (args.field or []))
+    if args.whiteboard is not None:
+        if "whiteboard" in fields:
+            die("pass only one of --whiteboard or --field whiteboard=...")
+        fields["whiteboard"] = args.whiteboard
     if args.attachment_flag and not args.attachment:
         die("--attachment-flag requires --attachment <id>")
     if args.attachment is not None and not str(args.attachment).isdigit():
         die(f"--attachment must be a numeric id, got {args.attachment!r}")
     if not bug_flags and not att_flags and not fields:
-        die("nothing to do: pass --flag, --field, or --attachment-flag")
+        die("nothing to do: pass --flag, --whiteboard, --field, or "
+            "--attachment-flag")
 
     bug_body = {}
     if bug_flags:
@@ -713,11 +768,14 @@ def build_parser():
     pc.add_argument("--op-sys", dest="op_sys")
     pc.add_argument("--platform")
     pc.add_argument("--assigned-to", dest="assigned_to")
+    pc.add_argument("--whiteboard",
+                    help="status whiteboard text")
     pc.add_argument("--keywords", action="append",
                     help="comma-separated or repeatable")
     pc.add_argument("--cc", action="append", help="comma-separated or repeatable")
     pc.add_argument("--group", action="append",
-                    help="security/visibility group (repeatable)")
+                    help="security/visibility group internal name or visible "
+                         "UI label (repeatable)")
     pc.add_argument("--see-also", dest="see_also", action="append")
     pc.add_argument("--blocks", action="append", help="bug number (repeatable)")
     pc.add_argument("--depends-on", dest="depends_on", action="append",
@@ -744,6 +802,9 @@ def build_parser():
     pf.add_argument("bug_id")
     pf.add_argument("--flag", action="append", metavar="name:status[:requestee]",
                     help="bug-level flag (repeatable)")
+    pf.add_argument("--whiteboard",
+                    help="set status whiteboard text (pass an empty value to "
+                         "clear)")
     pf.add_argument("--field", action="append", metavar="key=value",
                     help="bug field, incl. cf_* tracking flags (repeatable)")
     pf.add_argument("--attachment", metavar="ID",
