@@ -103,6 +103,11 @@ HTTP only for non-source hosts (bugzilla, phabricator, spec sites), which do not
 bot-challenge; flags a Git SHA placed on a Mercurial host; and refuses an
 `Install <X> overlay` pin outright.
 
+A rate-limited or unreachable non-source host (HTTP 429, 5xx, DNS failure) is
+retried and then reported as `UNVERIFIED`, never as a defect — it says nothing about
+whether the link is good, and counting it as broken teaches readers to discount real
+findings. Re-run those rather than editing the citation.
+
 **It checks transport and anchors, not meaning.** A link that resolves to the *wrong*
 lines is still a defect, so follow the mechanical pass with a manual read confirming
 the cited lines support the citing sentence. Never report a citation audit as passing

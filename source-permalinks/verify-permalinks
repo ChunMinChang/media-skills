@@ -44,6 +44,7 @@ import argparse
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 
 URL_RE = re.compile(r'https?://[^\s)>\]`"\']+')
@@ -92,14 +93,33 @@ def rev_exists(repo, rev):
     return sh(["git", "-C", repo, "cat-file", "-e", f"{rev}^{{commit}}"]).returncode == 0
 
 
-def http_ok(url):
+# A rate-limit or a server error says nothing about whether the link is good, so
+# retry briefly and then report it as inconclusive rather than as a dead link.
+RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
+
+
+def http_ok(url, attempts=3):
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": "verify-permalinks"})
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.status, None
-    except Exception as exc:  # noqa: BLE001 - any failure is a reportable defect
-        code = getattr(exc, "code", None)
-        return code, str(exc)
+    status = err = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return resp.status, None
+        except Exception as exc:  # noqa: BLE001 - classified by the caller
+            status = getattr(exc, "code", None)
+            err = str(exc)
+            retryable = status in RETRY_STATUSES or status is None
+            if not retryable or attempt == attempts - 1:
+                return status, err
+            delay = 2 ** attempt
+            hdrs = getattr(exc, "headers", None)
+            if hdrs is not None:
+                try:
+                    delay = max(delay, min(int(hdrs.get("Retry-After", 0)), 10))
+                except (TypeError, ValueError):
+                    pass
+            time.sleep(delay)
+    return status, err
 
 
 def check_overlay_pin(repos, rev):
@@ -145,6 +165,7 @@ def main():
     ok = 0
     defects = []
     offpin = []
+    inconclusive = []
 
     for path in args.files:
         try:
@@ -205,19 +226,28 @@ def main():
             status, err = http_ok(url)
             if status == 200:
                 ok += 1
+            elif status in RETRY_STATUSES or status is None:
+                # Rate-limited, server-side, or unreachable: unknown, not dead.
+                inconclusive.append(
+                    f"UNVERIFIED  [HTTP {status}, still failing after retries]  {path}  ->  {url}"
+                    + (f"  ({err})" if status is None and err else ""))
             else:
-                defects.append(f"HTTP {status}  {path}  ->  {url}"
-                               + (f"  ({err})" if err and status is None else ""))
+                defects.append(f"HTTP {status}  {path}  ->  {url}")
 
     if not args.quiet:
         for d in defects:
             print(d)
         for o in offpin:
             print(o)
+        for u in inconclusive:
+            print(u)
     summary = f"verify-permalinks: {ok} resolved, {len(defects)} defect(s)"
     if offpin:
         summary += (f", {len(offpin)} off-pin advisory(ies) — expected in history docs;"
                     " use --strict-rev to enforce")
+    if inconclusive:
+        summary += (f", {len(inconclusive)} unverified (rate-limited or unreachable —"
+                    " re-run, do not treat as dead)")
     print(summary)
     return 1 if defects else 0
 
